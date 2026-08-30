@@ -2,11 +2,14 @@
 // =====================================================================
 // إجراءات: list, get, record, void, reportCollection
 //
-// ✅ لا حاجة هنا لاستدعاء أي RPC يدوي بعد التسجيل/الإلغاء — الـTrigger
-// المربوط بجدول fin_payments (راجع ملف SQL الأساسي) يُعيد حساب حالة
-// الفاتورة (fin_invoices) والحالة المالية للطالب (fin_student_clearance)
-// تلقائياً عند كل INSERT/UPDATE/DELETE بهذا الجدول — هذا بالضبط الفرق
-// عن ملف invoices.js اللي احتاج استدعاءً يدوياً.
+// ⚠️ تحوّل جوهري: الدفعة تُسجَّل على الطالب مباشرة وتُوزَّع على
+// استحقاقاته (fin_dues) عبر جدول الربط fin_payment_allocations — لم
+// تعد تحتاج فاتورة موجودة مسبقاً إطلاقاً. بلا توزيع يدوي مُرسَل، توزَّع
+// تلقائياً على أقدم الاستحقاقات المفتوحة أولاً (FIFO).
+//
+// ✅ لا حاجة لاستدعاء أي RPC يدوي بعد التسجيل/الإلغاء — الـTrigger على
+// fin_payment_allocations (وTrigger آخر لتغيّر حالة الدفعة نفسها) يُعيد
+// حساب حالة كل استحقاق والحالة المالية للطالب تلقائياً وفورياً.
 // =====================================================================
 
 import { z } from 'zod';
@@ -94,75 +97,114 @@ async function handleGet(req, res) {
     throw err;
   }
 
-  const { data: invoice } = await supabaseAdmin.from('fin_invoices').select('invoice_number, total_amount, paid_amount, status').eq('id', payment.invoice_id).maybeSingle();
+  const { data: invoice } = payment.invoice_id
+    ? await supabaseAdmin.from('fin_invoices').select('invoice_number, total_amount, paid_amount, status').eq('id', payment.invoice_id).maybeSingle()
+    : { data: null };
+  const { data: allocations } = await supabaseAdmin
+    .from('fin_payment_allocations').select('amount, fin_dues(description, fee_item_id)').eq('payment_id', paymentId);
   const { data: student } = await supabaseAdmin.from('students').select('id, name_ar, national_id, branch, stage, grade, section').eq('id', payment.student_id).maybeSingle();
   const { data: recorder } = payment.recorded_by ? await supabaseAdmin.from('employees').select('name_ar').eq('id', payment.recorded_by).maybeSingle() : { data: null };
   const { data: method } = payment.payment_method_id ? await supabaseAdmin.from('fin_payment_methods').select('name').eq('id', payment.payment_method_id).maybeSingle() : { data: null };
 
   return res.status(200).json({
     success: true,
-    data: { payment, invoice, student, recorderName: recorder?.name_ar || null, paymentMethodName: method?.name || null },
+    data: {
+      payment, invoice, student, recorderName: recorder?.name_ar || null, paymentMethodName: method?.name || null,
+      allocations: (allocations || []).map((a) => ({ amount: a.amount, description: a.fin_dues?.description || null })),
+    },
   });
 }
 
-/* -------------------- تسجيل دفعة جديدة -------------------- */
+/* -------------------- تسجيل دفعة جديدة (على الاستحقاقات مباشرة) -------------------- */
 async function handleRecord(req, res) {
   const user = requireAuth(req);
   requireRole(user, RECORD_ROLES_);
   const d = validateBody(recordPaymentSchema, req.body);
 
-  const { data: invoice, error: invError } = await supabaseAdmin
-    .from('fin_invoices').select('id, student_id, branch, academic_year, term_id, status, total_amount, paid_amount, period_id, invoice_number').eq('id', d.invoiceId).maybeSingle();
-  if (invError) throw invError;
-  if (!invoice) {
-    const err = new Error('الفاتورة غير موجودة');
+  const { data: student, error: stuError } = await supabaseAdmin
+    .from('students').select('id, branch').eq('id', d.studentId).is('deleted_at', null).maybeSingle();
+  if (stuError) throw stuError;
+  if (!student) {
+    const err = new Error('الطالب غير موجود');
     err.statusCode = 404;
-    throw err;
-  }
-  if (invoice.status === 'void') {
-    const err = new Error('لا يمكن تسجيل دفعة على فاتورة مُلغاة');
-    err.statusCode = 409;
     throw err;
   }
 
   const allowed = resolveBranchScope(user, null);
-  if (allowed && !allowed.includes(invoice.branch)) {
-    const err = new Error('غير مصرَّح لك بفرع هذه الفاتورة');
+  if (allowed && !allowed.includes(student.branch)) {
+    const err = new Error('غير مصرَّح لك بفرع هذا الطالب');
     err.statusCode = 403;
     throw err;
   }
 
-  // ⚠️ نفس قيد الفترة المُقفَلة المطبَّق بملف invoices.js بالضبط
-  if (invoice.period_id) {
-    const { data: period } = await supabaseAdmin.from('fin_financial_periods').select('status').eq('id', invoice.period_id).maybeSingle();
-    if (period && period.status === 'closed') {
-      const err = new Error('هذه الفاتورة ضمن فترة مالية مُقفَلة — لا يمكن تسجيل دفعة جديدة عليها إلا بصلاحية خاصة بعد إعادة فتح الفترة');
-      err.statusCode = 403;
+  // الاستحقاقات المفتوحة، الأقدم أولاً (تاريخ استحقاق فأقدم تسجيل) — أساس التوزيع التلقائي (FIFO)
+  const { data: openDues, error: duesError } = await supabaseAdmin
+    .from('fin_dues').select('*').eq('student_id', d.studentId).in('status', ['due', 'partially_paid', 'overdue'])
+    .order('due_date', { ascending: true, nullsFirst: false }).order('created_at', { ascending: true });
+  if (duesError) throw duesError;
+
+  let allocations;
+  if (d.allocations && d.allocations.length) {
+    // توزيع يدوي مُرسَل من المحاسب — يجب أن يطابق مجموعه المبلغ بالضبط، وكل استحقاق يخصّ نفس الطالب فعلاً
+    allocations = d.allocations.map((a) => {
+      const due = openDues.find((x) => String(x.id) === String(a.dueId));
+      if (!due) {
+        const err = new Error('أحد الاستحقاقات المحدَّدة بالتوزيع غير موجود ضمن استحقاقات هذا الطالب المفتوحة');
+        err.statusCode = 400;
+        throw err;
+      }
+      return { dueId: due.id, amount: a.amount, academicYear: due.academic_year, termId: due.term_id };
+    });
+    const allocatedSum = allocations.reduce((s, a) => s + a.amount, 0);
+    if (Math.abs(allocatedSum - d.amount) > 0.01) {
+      const err = new Error('مجموع التوزيع اليدوي يجب أن يساوي مبلغ الدفعة بالضبط');
+      err.statusCode = 400;
       throw err;
+    }
+  } else {
+    // توزيع تلقائي — أقدم استحقاق مفتوح أولاً حتى ينفد المبلغ أو تنتهي الاستحقاقات
+    allocations = [];
+    let remaining = d.amount;
+    for (const due of openDues) {
+      if (remaining <= 0) break;
+      const dueRemaining = Number(due.amount) - Number(due.discount_amount) - Number(due.paid_amount);
+      if (dueRemaining <= 0) continue;
+      const apply = Math.min(dueRemaining, remaining);
+      allocations.push({ dueId: due.id, amount: apply, academicYear: due.academic_year, termId: due.term_id });
+      remaining -= apply;
     }
   }
 
-  const remainingBefore = Number(invoice.total_amount) - Number(invoice.paid_amount);
-  const isOverpayment = d.amount > remainingBefore;
+  const totalAllocated = allocations.reduce((s, a) => s + a.amount, 0);
+  const isOverpayment = totalAllocated < d.amount; // جزء من المبلغ بلا استحقاق مقابل له (دفعة مقدَّمة/زائدة)
+  const firstAllocation = allocations[0];
 
   const paymentNumber = await generatePaymentNumber(supabaseAdmin);
 
   const { data: newPayment, error: insError } = await supabaseAdmin.from('fin_payments').insert({
-    payment_number: paymentNumber, invoice_id: d.invoiceId, student_id: invoice.student_id, branch: invoice.branch,
-    academic_year: invoice.academic_year, term_id: invoice.term_id, amount: d.amount,
-    payment_method_id: d.paymentMethodId, account_id: d.accountId || null, reference_number: d.referenceNumber || null,
-    payment_date: d.paymentDate || new Date().toISOString().slice(0, 10),
+    payment_number: paymentNumber, student_id: d.studentId, branch: student.branch,
+    academic_year: firstAllocation?.academicYear || null, term_id: firstAllocation?.termId || null,
+    amount: d.amount, payment_method_id: d.paymentMethodId, account_id: d.accountId || null,
+    reference_number: d.referenceNumber || null, payment_date: d.paymentDate || new Date().toISOString().slice(0, 10),
     attachments: d.attachments && d.attachments.length ? d.attachments : null,
     notes: d.notes || null, recorded_by: user.id,
   }).select('id, payment_number').single();
   if (insError) throw insError;
 
-  // الـTrigger أعاد حساب حالة الفاتورة والحالة المالية للطالب تلقائياً بهذه اللحظة
-  await writeAudit(user, 'تسجيل دفعة جديدة', { invoiceNumber: invoice.invoice_number, amount: d.amount, isOverpayment }, newPayment.id);
+  if (allocations.length) {
+    const allocationRows = allocations.map((a) => ({ payment_id: newPayment.id, due_id: a.dueId, amount: a.amount }));
+    const { error: allocError } = await supabaseAdmin.from('fin_payment_allocations').insert(allocationRows);
+    if (allocError) throw allocError;
+  }
+  // الـTrigger على fin_payment_allocations أعاد حساب كل استحقاق متأثِّر + الحالة المالية للطالب تلقائياً بهذه اللحظة
+
+  await writeAudit(user, 'تسجيل دفعة جديدة', {
+    studentId: d.studentId, amount: d.amount, allocatedDuesCount: allocations.length, isOverpayment,
+  }, newPayment.id);
 
   return res.status(200).json({
     success: true,
-    data: { id: newPayment.id, paymentNumber: newPayment.payment_number, isOverpayment },
+    data: { id: newPayment.id, paymentNumber: newPayment.payment_number, isOverpayment, allocatedCount: allocations.length },
   });
 }
 
@@ -199,7 +241,7 @@ async function handleVoid(req, res) {
   }).eq('id', d.paymentId);
   if (voidError) throw voidError;
 
-  // الـTrigger أعاد حساب حالة الفاتورة والحالة المالية للطالب تلقائياً بهذه اللحظة
+  // الـTrigger أعاد حساب كل استحقاق مرتبط بهذه الدفعة + الحالة المالية للطالب تلقائياً بهذه اللحظة
   await writeAudit(user, 'إلغاء دفعة', { paymentNumber: payment.payment_number, reason: d.reason }, payment.id);
 
   return res.status(200).json({ success: true, data: true });
