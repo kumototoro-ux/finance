@@ -36,7 +36,7 @@ async function handleLogin(req, res) {
     .from('users')
     .select(`
       id, username, password_hash, status,
-      employees:id ( id, national_id, name_ar, branch, role, user_type, employee_branches(branch) )
+      employees!users_id_fkey ( id, national_id, name_ar, branch, role, user_type, employee_branches(branch) )
     `)
     .eq('username', username)
     .maybeSingle();
