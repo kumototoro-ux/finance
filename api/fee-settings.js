@@ -210,8 +210,19 @@ async function handleGetSiteInfo(req, res) {
   });
 }
 
+/* -------------------- قائمة الفروع المركزية (بمصادقة أساسية فقط، بلا قيد دور) -------------------- */
+// ⚠️ settings_lists جدول مركزي مشترك (list_key='branches') — قراءة فقط،
+// بلا أي كتابة عليه من موقع المالية إطلاقاً (الفرع كيان مركزي مشترك).
+async function handleListBranches(req, res) {
+  requireAuth(req);
+  const { data, error } = await supabaseAdmin.from('settings_lists').select('value').eq('list_key', 'branches').order('sort_order');
+  if (error) throw error;
+  return res.status(200).json({ success: true, data: (data || []).map((r) => r.value) });
+}
+
 export default createRouter({
   getSiteInfo: handleGetSiteInfo,
+  listBranches: handleListBranches,
 
   // بنود الرسوم
   listFeeItems: feeItems.list,
