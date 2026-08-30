@@ -11,28 +11,62 @@
 
 const APP = { token: null, user: null };
 
-/* ===================== خارطة الصفحات (تُستكمل مع كل صفحة قادمة) ===================== */
-// كل مفتاح هنا = دالة renderXxxView مطابقة، وأيقونة، وتسمية عربية.
-// أدوار الوصول مطابقة لأدوار كل ملف API الخاص بالصفحة (راجع الباك إند).
-const PAGE_REGISTRY = {
-  home: { label: 'الرئيسية', icon: 'home', roles: ['role_admin', 'role_finance_admin', 'role_accountant', 'role_collection_monitor'] },
-  // 🆕 الصفحات القادمة تُضاف هنا صفحة بصفحة:
-  // students: { label: 'الطلاب', icon: 'students', roles: [...] },
-  // invoices: { label: 'الفواتير', icon: 'invoice', roles: [...] },
-  // payments: { label: 'الدفعات', icon: 'payment', roles: [...] },
-  // collection: { label: 'التحصيل والرقابة', icon: 'branches', roles: [...] },
-  // reconciliation: { label: 'المطابقة', icon: 'reconciliation', roles: [...] },
-  // financialPeriods: { label: 'الفترات المالية', icon: 'period', roles: [...] },
-  // revenuesExpenses: { label: 'المالية', icon: 'revenue', roles: [...] },
-  // payroll: { label: 'الرواتب', icon: 'payroll', roles: [...] },
-  // financeStaff: { label: 'موظفو المالية', icon: 'staff', roles: ['role_admin', 'role_finance_admin'] },
-  // feeSettings: { label: 'الإعدادات', icon: 'settings', roles: ['role_admin', 'role_finance_admin'] },
-  // auditLog: { label: 'سجل التدقيق', icon: 'audit', roles: ['role_admin', 'role_finance_admin'] },
+const ROLE_LABELS_AR = {
+  role_admin: 'الأدمن العام',
+  role_finance_admin: 'أدمن الإدارة المالية',
+  role_accountant: 'محاسب',
+  role_collection_monitor: 'مراقب الفروع والتحصيل',
 };
 
-const SIDEBAR_SECTIONS = [
-  { label: null, keys: ['home'] },
-  // 🆕 تُقسَّم بقية الصفحات لأقسام (الطلاب/الفواتير، التحصيل والرقابة، الإدارة) مع كل صفحة قادمة
+/* ===================== خارطة الصفحات ===================== */
+// كل صفحة لسه ما بُنيت فعلياً تُشير مؤقّتاً لـcomingSoonRender() — تعرض
+// "قيد الإنشاء" بدل كسر التنقّل. تُستبدَل بدالة renderXxxView حقيقية
+// أول ما تُبنى الصفحة، بلا أي تعديل على بقية الملف.
+function comingSoonRender(label) {
+  return function () {
+    document.getElementById('mainContent').innerHTML = `
+      <div class="card">
+        <h3>${escapeHtml(label)}</h3>
+        <p style="color:#888">هذه الصفحة قيد الإنشاء بعد — قريباً</p>
+      </div>`;
+  };
+}
+
+const PAGE_REGISTRY = {
+  home: { label: 'الرئيسية', icon: 'home', render: renderHomeView },
+  students: { label: 'الطلاب', icon: 'students', render: comingSoonRender('الطلاب') },
+  invoices: { label: 'الفواتير', icon: 'invoice', render: comingSoonRender('الفواتير') },
+  payments: { label: 'الدفعات', icon: 'payment', render: comingSoonRender('الدفعات') },
+  collection: { label: 'التحصيل والرقابة', icon: 'branches', render: comingSoonRender('التحصيل والرقابة') },
+  reconciliation: { label: 'المطابقة المالية', icon: 'reconciliation', render: comingSoonRender('المطابقة المالية') },
+  financialPeriods: { label: 'الفترات المالية', icon: 'period', render: comingSoonRender('الفترات المالية') },
+  revenuesExpenses: { label: 'الإيرادات والمصروفات', icon: 'revenue', render: comingSoonRender('الإيرادات والمصروفات') },
+  payroll: { label: 'الرواتب', icon: 'payroll', render: comingSoonRender('الرواتب') },
+  financeStaff: { label: 'موظفو المالية', icon: 'staff', render: comingSoonRender('موظفو المالية') },
+  feeSettings: { label: 'الإعدادات', icon: 'settings', render: comingSoonRender('الإعدادات') },
+  auditLog: { label: 'سجل التدقيق', icon: 'audit', render: comingSoonRender('سجل التدقيق') },
+};
+
+/** أي دور غير مذكور هنا يحصل تلقائياً على "الرئيسية" فقط */
+const ROLE_PAGES = {
+  role_admin: ['home', 'students', 'invoices', 'payments', 'collection', 'reconciliation', 'financialPeriods', 'revenuesExpenses', 'payroll', 'financeStaff', 'feeSettings', 'auditLog'],
+  role_finance_admin: ['home', 'students', 'invoices', 'payments', 'collection', 'reconciliation', 'financialPeriods', 'revenuesExpenses', 'payroll', 'financeStaff', 'feeSettings', 'auditLog'],
+  role_accountant: ['home', 'students', 'invoices', 'payments', 'revenuesExpenses', 'payroll'],
+  role_collection_monitor: ['home', 'collection', 'reconciliation'],
+};
+
+function pagesForCurrentUser() {
+  return ROLE_PAGES[APP.user.role] || ['home'];
+}
+
+/** مجموعات الشريط الجانبي — عناوين مفردة بلا مجموعة، وقوائم قابلة للطيّ لكل فئة.
+ * أي مجموعة تصبح فارغة لدور معيّن تختفي تلقائياً بلا أثر. */
+const SIDEBAR_GROUPS = [
+  { type: 'single', key: 'home' },
+  { type: 'group', label: 'الطلاب والفواتير', icon: 'students', items: ['students', 'invoices', 'payments'] },
+  { type: 'group', label: 'التحصيل والرقابة', icon: 'branches', items: ['collection', 'reconciliation'] },
+  { type: 'group', label: 'المالية', icon: 'revenue', items: ['revenuesExpenses', 'payroll', 'financialPeriods'] },
+  { type: 'group', label: 'الإدارة والإعدادات', icon: 'settings', items: ['financeStaff', 'feeSettings', 'auditLog'] },
 ];
 
 /* ===================== نقطة الانطلاق ===================== */
@@ -159,68 +193,208 @@ function renderShell() {
           <div class="header-user" id="headerUser">
             <div class="user-avatar">${escapeHtml(nameInitial)}</div>
             <div class="user-name">${escapeHtml(APP.user.fullName)}</div>
+            ${ICONS.chevronDown()}
+            <div class="user-dropdown" id="userDropdown">
+              <div class="user-dropdown-info">
+                <div class="user-dropdown-name">${escapeHtml(APP.user.fullName)}</div>
+                <div class="user-dropdown-role">${escapeHtml(ROLE_LABELS_AR[APP.user.role] || APP.user.role)}</div>
+              </div>
+              <button type="button" id="openProfileInfoBtn">${ICONS.users()} الملف الشخصي</button>
+              <button type="button" id="dropdownLogoutBtn">${ICONS.logout()} تسجيل الخروج</button>
+            </div>
           </div>
         </header>
         <main class="main-content content-fade-in" id="mainContent"></main>
+        <nav class="bottom-nav" id="bottomNav"></nav>
       </div>
     </div>`;
 
-  renderSidebarNav();
+  const pages = pagesForCurrentUser();
+  const lastView = localStorage.getItem('finance_lastView');
+  renderGroupedSidebarNav(pages, lastView && pages.includes(lastView) ? lastView : pages[0]);
+  renderBottomNav();
 
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
   const openSidebar = () => { sidebar.classList.add('open'); overlay.classList.add('show'); };
-  const closeSidebar = () => { sidebar.classList.remove('open'); overlay.classList.remove('show'); };
-
   document.getElementById('menuToggleBtn').addEventListener('click', () => {
-    sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+    sidebar.classList.contains('open') ? closeSidebarMobile() : openSidebar();
   });
-  document.getElementById('sidebarCloseBtn').addEventListener('click', closeSidebar);
-  overlay.addEventListener('click', closeSidebar);
-  document.getElementById('headerUser').addEventListener('click', () => {
-    if (confirm('تسجيل الخروج؟')) doLogout();
+  document.getElementById('sidebarCloseBtn').addEventListener('click', closeSidebarMobile);
+  overlay.addEventListener('click', closeSidebarMobile);
+
+  // قائمة حساب المستخدم المنسدلة
+  document.getElementById('headerUser').addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('userDropdown').classList.toggle('show');
   });
+  document.addEventListener('click', () => document.getElementById('userDropdown')?.classList.remove('show'));
+  document.getElementById('dropdownLogoutBtn').addEventListener('click', doLogout);
+  document.getElementById('openProfileInfoBtn').addEventListener('click', openMyProfileModal);
 }
 
-function renderSidebarNav() {
-  const nav = document.getElementById('sidebarNav');
-  const accessibleKeys = Object.keys(PAGE_REGISTRY).filter((key) => PAGE_REGISTRY[key].roles.includes(APP.user.role));
+function closeSidebarMobile() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
+}
 
-  nav.innerHTML = SIDEBAR_SECTIONS.map((section) => {
-    const keys = section.keys.filter((k) => accessibleKeys.includes(k));
-    if (!keys.length) return '';
-    const sectionLabel = section.label ? `<div class="sidebar-section-label">${escapeHtml(section.label)}</div>` : '';
-    const links = keys.map((key) => {
-      const page = PAGE_REGISTRY[key];
-      return `<a data-page="${key}">${ICONS[page.icon]()}<span>${escapeHtml(page.label)}</span></a>`;
-    }).join('');
-    return sectionLabel + links;
+function renderGroupedSidebarNav(pages, activeView) {
+  const nav = document.getElementById('sidebarNav');
+  const singleLinkHtml = (key) => `<a data-page="${key}" title="${escapeHtml(PAGE_REGISTRY[key].label)}">${ICONS[PAGE_REGISTRY[key].icon]()}<span>${escapeHtml(PAGE_REGISTRY[key].label)}</span></a>`;
+
+  nav.innerHTML = SIDEBAR_GROUPS.map((g) => {
+    if (g.type === 'single') {
+      return pages.includes(g.key) ? singleLinkHtml(g.key) : '';
+    }
+    const visibleItems = g.items.filter((k) => pages.includes(k));
+    if (!visibleItems.length) return '';
+    const isActiveGroup = visibleItems.includes(activeView);
+    return `
+      <div class="sidebar-group">
+        <button type="button" class="sidebar-group-header ${isActiveGroup ? 'expanded' : ''}" data-group-toggle>
+          ${ICONS[g.icon]()}<span>${escapeHtml(g.label)}</span>${ICONS.chevronDown()}
+        </button>
+        <div class="sidebar-group-items" style="display:${isActiveGroup ? 'block' : 'none'}">
+          ${visibleItems.map(singleLinkHtml).join('')}
+        </div>
+      </div>`;
   }).join('');
 
+  nav.querySelectorAll('[data-group-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const itemsBox = btn.nextElementSibling;
+      const willOpen = itemsBox.style.display !== 'block';
+      itemsBox.style.display = willOpen ? 'block' : 'none';
+      btn.classList.toggle('expanded', willOpen);
+    });
+  });
   nav.querySelectorAll('[data-page]').forEach((link) => {
     link.addEventListener('click', () => navigate(link.getAttribute('data-page')));
   });
 }
 
+/** الشريط السفلي بالجوال — 4 اختصارات ثابتة، منفصلة تماماً عن القائمة
+ * الجانبية الكاملة (تُفتَح بزر ☰ أو زر "المزيد"). */
+function renderBottomNav() {
+  const pages = pagesForCurrentUser();
+  const BOTTOM_NAV_ITEMS = [
+    { key: 'home', label: 'الرئيسية', icon: 'home', ready: true },
+    { key: 'students', label: 'الطلاب', icon: 'students', ready: false },
+    { key: 'payments', label: 'الدفعات', icon: 'payment', ready: false },
+    { key: 'more', label: 'المزيد', icon: 'menu', ready: true },
+  ].filter((item) => item.key === 'more' || pages.includes(item.key));
+
+  document.getElementById('bottomNav').innerHTML = BOTTOM_NAV_ITEMS
+    .map((item) => `<a data-bottom-key="${item.key}" data-ready="${item.ready}">${ICONS[item.icon]()}<span>${escapeHtml(item.label)}</span></a>`)
+    .join('');
+
+  document.querySelectorAll('#bottomNav a').forEach((a) => {
+    a.addEventListener('click', () => {
+      const key = a.getAttribute('data-bottom-key');
+      if (key === 'more') { document.getElementById('sidebar').classList.add('open'); document.getElementById('sidebarOverlay').classList.add('show'); return; }
+      const isReady = a.getAttribute('data-ready') === 'true';
+      if (!isReady) { showToast('قريباً — هذي الصفحة لم تُبنَ بعد', 'error'); return; }
+      navigate(key);
+    });
+  });
+}
+
+/** نافذة تفاصيل عامة (Modal) — تُستخدَم للملف الشخصي، ولاحقاً لأي نموذج آخر */
+function showDetailModal(title, subtitle, rows, footerHtml) {
+  const existing = document.getElementById('detailModalOverlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'detailModalOverlay';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <h3>${escapeHtml(title)}</h3>
+          ${subtitle ? `<p class="modal-subtitle">${escapeHtml(subtitle)}</p>` : ''}
+        </div>
+        <button type="button" class="modal-close-btn" id="modalCloseBtn">${ICONS.close()}</button>
+      </div>
+      <div class="modal-body" id="modalBodyContent">
+        ${rows.map((r) => `
+          <div class="modal-detail-row">
+            <span class="modal-detail-label">${escapeHtml(r.label)}</span>
+            <span class="modal-detail-value">${r.value ? escapeHtml(r.value) : '<span style="color:#bbb">—</span>'}</span>
+          </div>`).join('')}
+      </div>
+      ${footerHtml ? `<div class="modal-footer">${footerHtml}</div>` : ''}
+    </div>`;
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('show'));
+
+  const close = () => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200); };
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.getElementById('modalCloseBtn').addEventListener('click', close);
+  return { overlay, close };
+}
+
+/** بطاقة الملف الشخصي — تفتح من القائمة المنسدلة بالشريط العلوي */
+function openMyProfileModal() {
+  const u = APP.user;
+  const { overlay } = showDetailModal(u.fullName, ROLE_LABELS_AR[u.role] || u.role, [
+    { label: 'اسم المستخدم', value: u.username },
+    { label: 'الدور (الصلاحية)', value: ROLE_LABELS_AR[u.role] || u.role },
+    { label: 'الفرع', value: u.branch },
+  ], `
+    <button type="button" id="openChangePasswordBtn" class="btn-outline-sm" style="width:100%;justify-content:center;margin-bottom:8px">${ICONS.key()} تغيير كلمة المرور</button>
+    <button type="button" id="modalLogoutBtn" class="btn-danger-outline btn-outline-sm" style="width:100%;justify-content:center">${ICONS.logout()} تسجيل الخروج</button>
+  `);
+
+  document.getElementById('modalLogoutBtn').addEventListener('click', () => { overlay.remove(); doLogout(); });
+  document.getElementById('openChangePasswordBtn').addEventListener('click', () => {
+    const body = document.getElementById('modalBodyContent');
+    body.innerHTML = `
+      <div class="field"><label>كلمة المرور الجديدة</label><input type="password" id="myNewPassword" minlength="6"></div>
+      <button type="button" id="saveNewPasswordBtn" style="width:100%">حفظ كلمة المرور الجديدة</button>`;
+    document.getElementById('saveNewPasswordBtn').addEventListener('click', async () => {
+      const newPassword = document.getElementById('myNewPassword').value;
+      if (newPassword.length < 6) { showToast('كلمة المرور يجب ألا تقل عن 6 أحرف', 'error'); return; }
+      try {
+        await apiCall('auth', { method: 'POST', body: { action: 'forceSetPassword', newPassword } });
+        showToast('تم تغيير كلمة المرور بنجاح', 'success');
+        overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200);
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
+}
+
 /* ===================== التوجيه بين الصفحات ===================== */
 function navigate(pageKey) {
+  const pages = pagesForCurrentUser();
+  if (!PAGE_REGISTRY[pageKey] || !pages.includes(pageKey)) {
+    pageKey = pages[0];
+  }
+  localStorage.setItem('finance_lastView', pageKey);
+
   const page = PAGE_REGISTRY[pageKey];
-  if (!page || !page.roles.includes(APP.user.role)) {
-    showToast('لا تملك صلاحية الوصول لهذه الصفحة', 'error');
-    return;
-  }
-
   document.getElementById('pageTitle').textContent = page.label;
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('sidebarOverlay').classList.remove('show');
+  closeSidebarMobile();
   document.querySelectorAll('#sidebarNav a').forEach((a) => a.classList.toggle('active', a.getAttribute('data-page') === pageKey));
+  document.querySelectorAll('#bottomNav a').forEach((a) => a.classList.toggle('active', a.getAttribute('data-bottom-key') === pageKey));
 
-  const renderFn = window[`render${pageKey.charAt(0).toUpperCase() + pageKey.slice(1)}View`];
-  if (typeof renderFn === 'function') {
-    renderFn();
-  } else {
-    document.getElementById('mainContent').innerHTML = `<div class="card"><p style="color:#888">هذه الصفحة قيد الإنشاء بعد</p></div>`;
+  // لو الصفحة النشطة داخل مجموعة قابلة للطيّ، افتحها تلقائياً حتى تظهر
+  const activeLink = document.querySelector(`#sidebarNav a[data-page="${pageKey}"]`);
+  const parentGroupItems = activeLink?.closest('.sidebar-group-items');
+  if (parentGroupItems) {
+    parentGroupItems.style.display = 'block';
+    parentGroupItems.previousElementSibling?.classList.add('expanded');
   }
+
+  page.render();
+
+  const main = document.getElementById('mainContent');
+  main.classList.remove('content-fade-in');
+  void main.offsetWidth;
+  main.classList.add('content-fade-in');
 }
 
 /* ===================== صفحة الرئيسية (لوحة الإدارة المالية) ===================== */
