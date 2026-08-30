@@ -396,6 +396,38 @@ function showDetailModal(title, subtitle, rows, footerHtml) {
   return { overlay, close };
 }
 
+/** نافذة تأكيد احترافية — بديل كامل عن confirm() الافتراضية بالمتصفح.
+ * تُرجع Promise<boolean> — true لو ضغط "موافق"، false لو "إلغاء" أو أغلقها. */
+function showConfirmModal(message, confirmLabel, cancelLabel) {
+  confirmLabel = confirmLabel || 'موافق';
+  cancelLabel = cancelLabel || 'إلغاء';
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-card" style="max-width:360px">
+        <div class="modal-body" style="padding:28px 22px 22px;text-align:center">
+          <p style="font-size:14.5px;font-weight:700;color:var(--primary);margin:0 0 22px;line-height:1.6">${escapeHtml(message)}</p>
+          <div style="display:flex;gap:10px">
+            <button type="button" id="confirmModalCancelBtn" class="btn-outline-sm" style="flex:1;justify-content:center;padding:11px">${escapeHtml(cancelLabel)}</button>
+            <button type="button" id="confirmModalOkBtn" style="flex:1">${escapeHtml(confirmLabel)}</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('show'));
+
+    const close = (result) => {
+      overlay.classList.remove('show');
+      setTimeout(() => overlay.remove(), 200);
+      resolve(result);
+    };
+    document.getElementById('confirmModalOkBtn').addEventListener('click', () => close(true));
+    document.getElementById('confirmModalCancelBtn').addEventListener('click', () => close(false));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+  });
+}
+
 /** بطاقة الملف الشخصي — تفتح من القائمة المنسدلة بالشريط العلوي */
 function openMyProfileModal() {
   const u = APP.user;
@@ -738,7 +770,7 @@ function renderStaffTable() {
     btn.addEventListener('click', async (evt) => {
       evt.stopPropagation();
       const name = btn.getAttribute('data-name');
-      if (!confirm(`تأكيد حذف الموظف "${name}"؟ سيُعطَّل حسابه فوراً.`)) return;
+      if (!(await showConfirmModal(`تأكيد حذف الموظف "${name}"؟ سيُعطَّل حسابه فوراً.`, 'حذف', 'إلغاء'))) return;
       try {
         await apiCall('finance-staff', { method: 'POST', body: { action: 'delete', id: btn.getAttribute('data-id') } });
         showToast('تم حذف الموظف بنجاح', 'success');
@@ -831,7 +863,7 @@ function renderUsersTable() {
     btn.addEventListener('click', async (evt) => {
       evt.stopPropagation();
       const newStatus = btn.getAttribute('data-new-status');
-      if (!confirm(newStatus === 'active' ? 'تأكيد تفعيل هذا الحساب؟' : 'تأكيد تعطيل هذا الحساب؟')) return;
+      if (!(await showConfirmModal(newStatus === 'active' ? 'تأكيد تفعيل هذا الحساب؟' : 'تأكيد تعطيل هذا الحساب؟'))) return;
       try {
         await apiCall('finance-staff', { method: 'POST', body: { action: 'toggleStatus', id: btn.getAttribute('data-id'), newStatus } });
         showToast(newStatus === 'active' ? 'تم التفعيل' : 'تم التعطيل', 'success');
@@ -847,7 +879,7 @@ function renderUsersTable() {
     btn.addEventListener('click', async (evt) => {
       evt.stopPropagation();
       const name = btn.getAttribute('data-name');
-      if (!confirm(`إعادة تعيين كلمة مرور "${name}" لرقم هويته الأصلي؟`)) return;
+      if (!(await showConfirmModal(`إعادة تعيين كلمة مرور "${name}" لرقم هويته الأصلي؟`, 'إعادة التعيين', 'إلغاء'))) return;
       try {
         const result = await apiCall('finance-staff', { method: 'POST', body: { action: 'resetPassword', id: btn.getAttribute('data-id') } });
         showToast('تمت إعادة التعيين — كلمة المرور الجديدة: ' + result.tempPassword, 'success');
@@ -921,29 +953,42 @@ async function renderLookupSection_(content, cfg) {
 
   content.innerHTML = `
     <h2 style="margin-top:0">${escapeHtml(cfg.label)} — إضافة وإدارة</h2>
-    <p style="color:#888;font-size:12.5px;margin-top:-10px">تعطيل عنصر لا يحذفه — يختفي من القوائم الجديدة فقط، ولا يؤثر على أي سجل قديم يستخدمه</p>
+    <p style="color:#888;font-size:12.5px;margin-top:-10px">تعطيل عنصر لا يحذفه من السجلات القديمة — فقط يختفي من هذي القائمة وأي قائمة اختيار جديدة</p>
     <div class="chip-input-wrap"><input type="text" id="lookupAddInput" placeholder="أضف ${escapeHtml(cfg.label)} جديد..."></div>
     <button type="button" id="lookupAddBtn" style="margin-top:10px">إضافة</button>
-    <div class="chip-list" id="lookupChipList" style="margin-top:18px"></div>`;
+    <div class="chip-list" id="lookupChipList" style="margin-top:18px"></div>
+    <div id="lookupShowInactiveWrap" style="margin-top:12px"></div>`;
+
+  let showInactive = false;
+
+  function renderInactiveToggle() {
+    const inactiveCount = items.filter((i) => !i.is_active).length;
+    const wrap = document.getElementById('lookupShowInactiveWrap');
+    if (!inactiveCount) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = `<button type="button" id="toggleInactiveBtn" class="btn-outline-sm">${showInactive ? 'إخفاء' : 'إظهار'} العناصر المعطَّلة (${inactiveCount})</button>`;
+    document.getElementById('toggleInactiveBtn').addEventListener('click', () => { showInactive = !showInactive; renderChips(); renderInactiveToggle(); });
+  }
 
   function renderChips() {
     const box = document.getElementById('lookupChipList');
-    box.innerHTML = items.length ? items.map((it) => `
+    const visibleItems = showInactive ? items : items.filter((i) => i.is_active);
+    box.innerHTML = visibleItems.length ? visibleItems.map((it) => `
       <span class="chip ${it.is_active ? '' : 'chip-inactive'}">
         ${escapeHtml(it.name)}
         <span class="chip-remove" data-toggle-id="${it.id}" data-active="${it.is_active}" title="${it.is_active ? 'تعطيل' : 'إعادة تفعيل'}">${it.is_active ? ICONS.close() : ICONS.plus()}</span>
-      </span>`).join('') : '<span class="chip-empty">لا توجد عناصر بعد</span>';
+      </span>`).join('') : '<span class="chip-empty">لا توجد عناصر مُفعَّلة حالياً</span>';
 
     box.querySelectorAll('[data-toggle-id]').forEach((el) => {
       el.addEventListener('click', async () => {
         const isActive = el.getAttribute('data-active') === 'true';
-        if (!confirm(isActive ? 'تعطيل هذا العنصر؟' : 'إعادة تفعيل هذا العنصر؟')) return;
+        if (!(await showConfirmModal(isActive ? 'تعطيل هذا العنصر؟ سيختفي من كل القوائم الجديدة.' : 'إعادة تفعيل هذا العنصر؟', isActive ? 'تعطيل' : 'تفعيل'))) return;
         try {
           await apiCall('fee-settings', { method: 'POST', body: { action: cfg.toggleAction, id: el.getAttribute('data-toggle-id'), isActive: !isActive } });
           const item = items.find((i) => String(i.id) === el.getAttribute('data-toggle-id'));
           if (item) item.is_active = !isActive;
           renderChips();
-          showToast('تم التحديث بنجاح', 'success');
+          renderInactiveToggle();
+          showToast(isActive ? 'تم التعطيل بنجاح' : 'تم التفعيل بنجاح', 'success');
         } catch (e) {
           showToast(e.message, 'error');
         }
@@ -951,13 +996,14 @@ async function renderLookupSection_(content, cfg) {
     });
   }
   renderChips();
+  renderInactiveToggle();
 
   document.getElementById('lookupAddBtn').addEventListener('click', async () => {
     const val = document.getElementById('lookupAddInput').value.trim();
     if (!val) return;
     try {
       await apiCall('fee-settings', { method: 'POST', body: { action: cfg.addAction, name: val } });
-      showToast('تمت الإضافة بنجاح', 'success');
+      showToast('تم الحفظ بنجاح', 'success');
       await renderFinSettingsSection();
     } catch (e) {
       showToast(e.message, 'error');
@@ -1022,10 +1068,10 @@ async function renderAccountsSection_(content) {
     area.querySelectorAll('[data-toggle-acc]').forEach((el) => {
       el.addEventListener('click', async () => {
         const isActive = el.getAttribute('data-active') === 'true';
-        if (!confirm(isActive ? 'تعطيل هذا الحساب؟' : 'إعادة تفعيل هذا الحساب؟')) return;
+        if (!(await showConfirmModal(isActive ? 'تعطيل هذا الحساب؟' : 'إعادة تفعيل هذا الحساب؟', isActive ? 'تعطيل' : 'تفعيل'))) return;
         try {
           await apiCall('fee-settings', { method: 'POST', body: { action: 'toggleAccountActive', id: el.getAttribute('data-toggle-acc'), isActive: !isActive } });
-          showToast('تم التحديث بنجاح', 'success');
+          showToast(isActive ? 'تم التعطيل بنجاح' : 'تم التفعيل بنجاح', 'success');
           await renderFinSettingsSection();
         } catch (e) {
           showToast(e.message, 'error');
@@ -1083,20 +1129,138 @@ async function renderFeeStructureSection_(content) {
     content.innerHTML = `<h2 style="margin-top:0">رسوم الفروع والصفوف</h2><p style="color:#888">لا توجد فصول دراسية مُعرَّفة بعد بموقع الموظفين — أضِف فصلاً دراسياً هناك أولاً</p>`;
     return;
   }
+  if (!activeFeeItems.length) {
+    content.innerHTML = `<h2 style="margin-top:0">رسوم الفروع والصفوف</h2><p style="color:#888">لا توجد بنود رسوم مُفعَّلة بعد — أضِفها أولاً من قسم "بنود الرسوم"</p>`;
+    return;
+  }
 
   content.innerHTML = `
-    <h2 style="margin-top:0">رسوم الفروع والصفوف</h2>
-    <p style="color:#888;font-size:12.5px;margin-top:-10px">حدِّد العام والفصل والفرع، ثم أدخل مبلغ كل بند رسوم لكل صف — كل صف وفرع يقدر يأخذ مبلغاً مختلفاً تماماً (مثال: نفس الصف بجدة 12,000 وبمكة 11,500)</p>
-    <div class="field"><label>العام الدراسي *</label><input type="text" id="fs_year" placeholder="مثال: 2025-2026" value="${escapeHtml(feeStructureFilters_.academicYear)}"></div>
-    <div class="field"><label>الفصل الدراسي *</label>
-      <select id="fs_term"><option value="">-- اختر --</option>${terms.map((t) => `<option value="${t.id}" ${String(t.id) === String(feeStructureFilters_.termId) ? 'selected' : ''}>${escapeHtml(t.academic_year)} — ${escapeHtml(t.name)}</option>`).join('')}</select>
+    <h2 style="margin-top:0">تعيين رسم جديد</h2>
+    <p style="color:#888;font-size:12.5px;margin-top:-10px">اختر بند الرسم والمبلغ، ثم حدِّد أي نطاق يشمله — من الأعمّ (كل الفروع) للأخصّ (صف واحد بفرع واحد)</p>
+
+    <div class="field"><label>بند الرسم *</label><select id="fsb_feeItem">${activeFeeItems.map((i) => `<option value="${i.id}">${escapeHtml(i.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>المبلغ (ريال) *</label><input type="number" min="0" step="0.01" id="fsb_amount" placeholder="0.00"></div>
+    <div class="field"><label>العام الدراسي *</label><input type="text" id="fsb_year" placeholder="مثال: 2025-2026"></div>
+
+    <label class="checkbox-item" style="margin-bottom:16px"><input type="checkbox" id="fsb_wholeYear"> تطبيق على العام الدراسي كاملاً (كل الفصول الدراسية دفعة واحدة)</label>
+
+    <div class="field" id="fsb_termField"><label>الفصل الدراسي *</label><select id="fsb_term">${terms.map((t) => `<option value="${t.id}">${escapeHtml(t.academic_year)} — ${escapeHtml(t.name)}</option>`).join('')}</select></div>
+
+    <div class="filter-card-title">نطاق التطبيق</div>
+    <div class="checkbox-list" style="margin-bottom:16px">
+      <label class="checkbox-item"><input type="radio" name="fsb_scope" value="global" checked> كل الفروع (نفس المبلغ للجميع)</label>
+      <label class="checkbox-item"><input type="radio" name="fsb_scope" value="branch"> فرع كامل (كل صفوفه)</label>
+      <label class="checkbox-item"><input type="radio" name="fsb_scope" value="stage"> مجموعة صفوف مختارة (مرحلة)</label>
+      <label class="checkbox-item"><input type="radio" name="fsb_scope" value="grade"> صف واحد محدَّد</label>
     </div>
-    <div class="field"><label>الفرع *</label>
-      <select id="fs_branch"><option value="">-- اختر --</option>${branches.map((b) => `<option value="${escapeHtml(b)}" ${b === feeStructureFilters_.branch ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}</select>
+
+    <div class="field" id="fsb_branchField" style="display:none"><label>الفرع *</label><select id="fsb_branch">${branches.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}</select></div>
+    <div id="fsb_gradesMultiBox" style="display:none">
+      <div class="filter-card-title">اختر الصفوف المشمولة</div>
+      <div class="checkbox-list">${branchCheckboxesHtml(grades, [], 'fsb-grade-cb')}</div>
+    </div>
+    <div class="field" id="fsb_gradeSingleField" style="display:none"><label>الصف *</label><select id="fsb_gradeSingle">${grades.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
+
+    <button type="button" id="fsb_saveBtn" style="margin-top:14px">حفظ الرسم</button>
+
+    <hr style="margin:28px 0;border-color:var(--outline)">
+
+    <h3>عرض وتعديل الرسوم الحالية</h3>
+    <p style="color:#888;font-size:12.5px;margin-top:-6px">اختر عاماً وفصلاً وفرعاً لمراجعة كل الصفوف، وتعديل أي مبلغ بمفرده</p>
+    <div class="field"><label>العام الدراسي</label><input type="text" id="fs_year" value="${escapeHtml(feeStructureFilters_.academicYear)}"></div>
+    <div class="field"><label>الفصل الدراسي</label>
+      <select id="fs_term">${terms.map((t) => `<option value="${t.id}" ${String(t.id) === String(feeStructureFilters_.termId) ? 'selected' : ''}>${escapeHtml(t.academic_year)} — ${escapeHtml(t.name)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>الفرع</label>
+      <select id="fs_branch">${branches.map((b) => `<option value="${escapeHtml(b)}" ${b === feeStructureFilters_.branch ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}</select>
     </div>
     <button type="button" id="fs_loadBtn">تحميل الرسوم</button>
     <div id="fs_gradesArea" style="margin-top:20px"></div>`;
 
+  /* ---------- تفاعل نموذج التعيين الجديد ---------- */
+  document.querySelectorAll('input[name="fsb_scope"]').forEach((r) => {
+    r.addEventListener('change', () => {
+      const scope = document.querySelector('input[name="fsb_scope"]:checked').value;
+      document.getElementById('fsb_branchField').style.display = scope === 'global' ? 'none' : 'block';
+      document.getElementById('fsb_gradesMultiBox').style.display = scope === 'stage' ? 'block' : 'none';
+      document.getElementById('fsb_gradeSingleField').style.display = scope === 'grade' ? 'block' : 'none';
+    });
+  });
+
+  document.getElementById('fsb_wholeYear').addEventListener('change', (e) => {
+    document.getElementById('fsb_termField').style.display = e.target.checked ? 'none' : 'block';
+  });
+
+  document.getElementById('fsb_saveBtn').addEventListener('click', async () => {
+    const feeItemId = document.getElementById('fsb_feeItem').value;
+    const amount = document.getElementById('fsb_amount').value.trim();
+    const academicYear = document.getElementById('fsb_year').value.trim();
+    const wholeYear = document.getElementById('fsb_wholeYear').checked;
+    const scope = document.querySelector('input[name="fsb_scope"]:checked').value;
+
+    if (!feeItemId || amount === '' || !academicYear) { showToast('أكمل بند الرسم والمبلغ والعام الدراسي', 'error'); return; }
+
+    let termIds;
+    if (wholeYear) {
+      termIds = terms.filter((t) => t.academic_year === academicYear).map((t) => t.id);
+      if (!termIds.length) { showToast('لا توجد فصول مُعرَّفة لهذا العام الدراسي بالتحديد — تحقّق من صيغة العام', 'error'); return; }
+    } else {
+      const termId = document.getElementById('fsb_term').value;
+      if (!termId) { showToast('اختر الفصل الدراسي', 'error'); return; }
+      termIds = [termId];
+    }
+
+    let branchList;
+    if (scope === 'global') {
+      branchList = branches;
+    } else {
+      const branch = document.getElementById('fsb_branch').value;
+      if (!branch) { showToast('اختر الفرع', 'error'); return; }
+      branchList = [branch];
+    }
+
+    let gradeList;
+    if (scope === 'global' || scope === 'branch') {
+      gradeList = grades;
+    } else if (scope === 'stage') {
+      gradeList = collectCheckedValues('.fsb-grade-cb');
+      if (!gradeList.length) { showToast('اختر صفاً واحداً على الأقل', 'error'); return; }
+    } else {
+      const grade = document.getElementById('fsb_gradeSingle').value;
+      if (!grade) { showToast('اختر الصف', 'error'); return; }
+      gradeList = [grade];
+    }
+
+    const totalCombos = termIds.length * branchList.length * gradeList.length;
+    if (totalCombos > 40) {
+      if (!(await showConfirmModal(`سيُطبَّق هذا الرسم على ${totalCombos} مجموعة (فرع × صف × فصل) — قد يستغرق هذا بضع ثوانٍ. متابعة؟`, 'تطبيق', 'إلغاء'))) return;
+    }
+
+    const btn = document.getElementById('fsb_saveBtn');
+    btn.disabled = true;
+    let savedCount = 0;
+    try {
+      for (const termId of termIds) {
+        for (const branch of branchList) {
+          for (const grade of gradeList) {
+            await apiCall('fee-settings', {
+              method: 'POST',
+              body: { action: 'setFeeStructure', academicYear, termId, branch, grade, feeItemId, amount: Number(amount) },
+            });
+            savedCount++;
+            btn.textContent = `جارِ الحفظ... (${savedCount}/${totalCombos})`;
+          }
+        }
+      }
+      showToast(`تم الحفظ بنجاح — طُبِّق على ${savedCount} مجموعة`, 'success');
+    } catch (e) {
+      showToast(e.message + ` (تم حفظ ${savedCount} من ${totalCombos} قبل التوقف)`, 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = 'حفظ الرسم';
+    }
+  });
+
+  /* ---------- شبكة المراجعة والتعديل الفردي ---------- */
   document.getElementById('fs_loadBtn').addEventListener('click', async () => {
     feeStructureFilters_.academicYear = document.getElementById('fs_year').value.trim();
     feeStructureFilters_.termId = document.getElementById('fs_term').value;
@@ -1125,11 +1289,6 @@ async function loadFeeStructureGrid_(grades, activeFeeItems) {
     });
   } catch (e) {
     area.innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
-    return;
-  }
-
-  if (!activeFeeItems.length) {
-    area.innerHTML = `<p style="color:#888">لا توجد بنود رسوم مُفعَّلة بعد — أضِفها أولاً من قسم "بنود الرسوم"</p>`;
     return;
   }
 
@@ -1171,7 +1330,7 @@ async function loadFeeStructureGrid_(grades, activeFeeItems) {
           });
           savedCount++;
         }
-        showToast(savedCount ? `تم حفظ ${savedCount} بند رسوم لصف ${grade}` : 'لم يتغيَّر أي مبلغ', 'success');
+        showToast(savedCount ? 'تم الحفظ بنجاح' : 'لم يتغيَّر أي مبلغ', 'success');
       } catch (e) {
         showToast(e.message, 'error');
       } finally {
@@ -1185,21 +1344,33 @@ async function loadFeeStructureGrid_(grades, activeFeeItems) {
 
 async function renderAuditLogView() {
   const main = document.getElementById('mainContent');
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
   main.innerHTML = `
     <div class="card">
-      <h2>سجل التدقيق (آخر 300 عملية بموقع المالية)</h2>
-      <div class="field"><label>بحث بالاسم أو نوع العملية</label><input id="auditSearchInput" type="text"></div>
+      <h2>سجل التدقيق</h2>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">افتراضياً يعرض آخر 7 أيام فقط — وسِّع الفترة لو تحتاج مدى أطول</p>
+      <div class="field"><label>من تاريخ</label><input type="date" id="audit_dateFrom" value="${weekAgo}"></div>
+      <div class="field"><label>إلى تاريخ</label><input type="date" id="audit_dateTo" value="${today}"></div>
+      <button type="button" id="audit_loadBtn">تحميل</button>
+      <div class="field" style="margin-top:16px"><label>بحث بالاسم أو نوع العملية</label><input id="auditSearchInput" type="text"></div>
       <div id="auditLogListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
     </div>`;
 
+  document.getElementById('audit_loadBtn').addEventListener('click', loadAuditLogList);
   document.getElementById('auditSearchInput').addEventListener('input', renderAuditLogTable);
   loadAuditLogList();
 }
 
 async function loadAuditLogList() {
   const area = document.getElementById('auditLogListArea');
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div>`;
+  const dateFrom = document.getElementById('audit_dateFrom').value;
+  const dateToRaw = document.getElementById('audit_dateTo').value;
+  const dateTo = dateToRaw ? `${dateToRaw}T23:59:59` : undefined;
   try {
-    APP.allAuditLog = await apiCall('finance-staff', { method: 'POST', body: { action: 'auditLog' } });
+    APP.allAuditLog = await apiCall('finance-staff', { method: 'POST', body: { action: 'auditLog', dateFrom, dateTo } });
     renderAuditLogTable();
   } catch (e) {
     area.innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
