@@ -429,6 +429,19 @@ button:disabled { opacity: .5; cursor: wait; }
 
 .receipt-preview-wrap { background: var(--surface); border-radius: var(--radius); padding: 4px; max-height: 55vh; overflow-y: auto; }
 
+/* ---------- قائمة بحث منسدلة (Autocomplete) — البحث عن طالب بالفواتير/الدفعات ---------- */
+.autocomplete-wrap { position: relative; }
+.search-results-box {
+  display: none; position: absolute; top: calc(100% + 4px); right: 0; left: 0; z-index: 70;
+  background: var(--surface-card); border: 1px solid var(--outline); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2); max-height: 280px; overflow-y: auto;
+}
+.search-results-box.show { display: block; }
+.search-result-item { padding: 10px 14px; cursor: pointer; }
+.search-result-item:hover { background: var(--surface); }
+.search-result-label { font-size: 13.5px; font-weight: 600; color: var(--primary); }
+.search-result-sublabel { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+
 /* ---------- الشريط السفلي العائم (جوال فقط) ---------- */
 .bottom-nav { display: none; }
 
