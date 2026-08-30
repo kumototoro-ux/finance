@@ -214,19 +214,28 @@ async function handleResetPassword(req, res) {
 }
 
 /* -------------------- سجل التدقيق (خاص بأحداث موقع المالية فقط) -------------------- */
+// ⚠️ بلا فلتر تاريخ، يُحمَّل افتراضياً آخر 7 أيام فقط (بدل 300 صف دائماً)
+// — نفس الحل المطبَّق بموقع الموظفين لتفادي ثقل الصفحة. يقدر المستخدم
+// يوسّع الفترة يدوياً من الواجهة.
 async function handleAuditLog(req, res) {
   const user = requireAuth(req);
   requireRole(user, FINANCE_STAFF_MANAGE_ROLES_);
+  const body = req.body || {};
 
-  // كل عمليات موقع المالية تُسجَّل بـ entity يبدأ بـ "fin" (finance_auth,
-  // finance_staff, fin_invoices...) — هذا يفصلها عن سجل موقع الموظفين
-  // رغم مشاركة نفس جدول audit_log تماماً
-  const { data, error } = await supabaseAdmin
+  const defaultFrom = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const dateFrom = body.dateFrom ? new Date(body.dateFrom).toISOString() : defaultFrom;
+
+  let query = supabaseAdmin
     .from('audit_log')
     .select('*')
     .like('entity', 'fin%')
+    .gte('created_at', dateFrom)
     .order('created_at', { ascending: false })
     .limit(300);
+  if (body.dateTo) query = query.lte('created_at', new Date(body.dateTo).toISOString());
+  if (body.branch) query = query.eq('branch', body.branch);
+
+  const { data, error } = await query;
   if (error) throw error;
   return res.status(200).json({ success: true, data });
 }
