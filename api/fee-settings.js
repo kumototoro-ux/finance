@@ -239,11 +239,19 @@ async function handleListGrades(req, res) {
   return res.status(200).json({ success: true, data: (data || []).map((r) => r.value) });
 }
 
+async function handleListSections(req, res) {
+  requireAuth(req);
+  const { data, error } = await supabaseAdmin.from('settings_lists').select('value').eq('list_key', 'sections').order('sort_order');
+  if (error) throw error;
+  return res.status(200).json({ success: true, data: (data || []).map((r) => r.value) });
+}
+
 export default createRouter({
   getSiteInfo: handleGetSiteInfo,
   listBranches: handleListBranches,
   listAcademicTerms: handleListAcademicTerms,
   listGrades: handleListGrades,
+  listSections: handleListSections,
 
   // بنود الرسوم
   listFeeItems: feeItems.list,
