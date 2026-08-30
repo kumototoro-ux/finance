@@ -42,10 +42,6 @@ body {
 }
 .app-header-title { font-weight: 800; font-size: 17px; flex: 1; }
 .header-start { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.header-branch-label {
-  font-size: 13px; font-weight: 700; color: var(--text-muted); white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; max-width: 220px;
-}
 .menu-toggle-btn {
   display: flex; background: var(--surface); border: none; color: var(--primary);
   width: 46px; height: 46px; border-radius: 999px; font-size: 19px; cursor: pointer;
@@ -65,24 +61,40 @@ body {
 .logout-btn-small:hover { background: var(--outline); }
 
 /* 🆕 شعار مصغَّر بالشريط العلوي — يظهر بالجوال فقط (القائمة الجانبية تحمل الشعار بسطح المكتب) */
-.header-brand-mobile { display: none; align-items: center; gap: 8px; font-weight: 800; font-size: 15px; color: var(--primary); }
+/* 🆕 شعار المدرسة الحقيقي بالشريط العلوي (وليس شعار المنصة — ذاك بالقائمة الجانبية فقط) */
+.header-school-brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; justify-content: center; }
+.header-school-logo-fallback, .header-school-logo-img {
+  width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; object-fit: cover;
+  display: flex; align-items: center; justify-content: center; background: var(--surface);
+}
+.header-school-text { min-width: 0; text-align: right; }
+.header-school-name {
+  font-weight: 800; font-size: 13.5px; color: var(--primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+}
+.header-school-branch { font-size: 11.5px; color: var(--text-muted); font-weight: 600; margin-top: 1px; }
 
 /* ---------- الهيكل (شريط جانبي + محتوى) ---------- */
 .app-body { display: flex; flex: 1; position: relative; min-height: 100vh; }
 
 .sidebar {
   width: 240px; background: var(--surface-card); padding: 20px 14px; flex-shrink: 0;
-  border-left: 1px solid var(--outline);
+  border-left: 1px solid var(--outline); transition: width .2s ease;
 }
 .sidebar-brand {
   display: flex; align-items: center; gap: 10px; padding: 6px 8px 22px;
   font-size: 19px; font-weight: 800; color: var(--primary);
 }
-.sidebar-brand span { flex: 1; }
-.sidebar-close-btn {
-  display: none; background: var(--surface); border: none; color: var(--primary);
-  width: 34px; height: 34px; border-radius: 999px; align-items: center; justify-content: center; cursor: pointer;
+.sidebar-brand .brand-text { flex: 1; }
+.sidebar-close-btn, .sidebar-collapse-btn {
+  background: var(--surface); border: none; color: var(--primary);
+  width: 34px; height: 34px; border-radius: 999px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0; margin-inline-start: auto;
 }
+.sidebar-close-btn:hover, .sidebar-collapse-btn:hover { background: var(--outline); }
+.sidebar-close-btn { display: none; } /* جوال فقط */
+.sidebar-collapse-btn { transform: rotate(90deg); transition: transform .2s ease; } /* سطح المكتب فقط */
+.sidebar.collapsed .sidebar-collapse-btn { transform: rotate(-90deg); }
 .sidebar nav a {
   display: flex; align-items: center; gap: 10px;
   padding: 12px 16px; margin-bottom: 4px; border-radius: 999px;
@@ -95,6 +107,20 @@ body {
   font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;
   letter-spacing: .4px; margin: 16px 12px 6px;
 }
+
+/* 🆕 طيّ الشريط الجانبي بسطح المكتب — أيقونات فقط، بلا أي نصوص */
+.sidebar.collapsed { width: 76px; padding: 20px 10px; }
+.sidebar.collapsed .brand-text,
+.sidebar.collapsed nav a span,
+.sidebar.collapsed .sidebar-group-header span,
+.sidebar.collapsed .sidebar-group-header svg:last-child {
+  display: none;
+}
+.sidebar.collapsed .sidebar-brand { justify-content: center; }
+.sidebar.collapsed .sidebar-collapse-btn { margin: 0; }
+.sidebar.collapsed nav a,
+.sidebar.collapsed .sidebar-group-header { justify-content: center; padding: 12px; }
+.sidebar.collapsed .sidebar-group-items { display: none !important; } /* لا معنى لعناصر فرعية بلا تسميات ظاهرة */
 
 /* 🆕 طبقة تعتيم خلف القائمة الجانبية بالجوال — تُغلِق القائمة عند الضغط عليها */
 .sidebar-overlay {
@@ -208,15 +234,23 @@ button:disabled { opacity: .5; cursor: wait; }
   }
   .sidebar.open { transform: translateX(0); }
   .sidebar-brand { padding: 16px 16px 18px; border-bottom: 1px solid var(--surface); margin-bottom: 6px; }
-  .sidebar-close-btn { display: flex; } /* زر الإغلاق يظهر بالجوال فقط */
+  .sidebar-close-btn { display: flex; width: 38px; height: 38px; } /* زر الإغلاق أوضح وأكبر بالجوال */
+  .sidebar-collapse-btn { display: none; } /* الطيّ لسطح المكتب فقط — لا معنى له بقائمة منسدلة أصلاً */
+  /* 🆕 الطيّ يُعطَّل تماماً بالجوال حتى لو كان مفعَّلاً بسطح المكتب مسبقاً */
+  .sidebar.collapsed { width: 78vw; max-width: 280px; }
+  .sidebar.collapsed .brand-text,
+  .sidebar.collapsed nav a span,
+  .sidebar.collapsed .sidebar-group-header span,
+  .sidebar.collapsed .sidebar-group-header svg:last-child { display: inline; }
+  .sidebar.collapsed .sidebar-group-items { display: block !important; }
   #sidebarNav { padding: 0 4px; }
   #sidebarNav a { padding: 14px 16px; font-size: 15px; margin-bottom: 6px; }
 
   .main-content { padding: 16px; }
   .user-name { display: none; } /* يبقى الأفاتار فقط، يوفّر مساحة حرجة */
   .app-header { padding: 12px 14px; gap: 8px; }
-  .header-brand-mobile { display: flex; } /* الشعار يظهر بالشريط العلوي بدل الجانبي المخفي */
-  .header-branch-label { flex: 1; text-align: center; font-size: 12.5px; max-width: none; }
+  .header-school-text { display: none; } /* بالجوال يبقى الشعار فقط لضيق المساحة، الاسم يظهر بسطح المكتب */
+  .header-school-brand { flex: 0; }
 
   .kpi-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
 }
