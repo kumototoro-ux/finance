@@ -35,8 +35,8 @@ function comingSoonRender(label) {
 const PAGE_REGISTRY = {
   home: { label: 'الرئيسية', icon: 'home', render: renderHomeView },
   students: { label: 'الطلاب', icon: 'students', render: renderStudentsView },
-  invoices: { label: 'الفواتير', icon: 'invoice', render: comingSoonRender('الفواتير') },
-  payments: { label: 'الدفعات', icon: 'payment', render: comingSoonRender('الدفعات') },
+  invoices: { label: 'الفواتير', icon: 'invoice', render: renderInvoicesView },
+  payments: { label: 'الدفعات', icon: 'payment', render: renderPaymentsView },
   collection: { label: 'التحصيل والرقابة', icon: 'branches', render: comingSoonRender('التحصيل والرقابة') },
   reconciliation: { label: 'المطابقة المالية', icon: 'reconciliation', render: comingSoonRender('المطابقة المالية') },
   financialPeriods: { label: 'الفترات المالية', icon: 'period', render: comingSoonRender('الفترات المالية') },
@@ -501,6 +501,77 @@ async function shareHtmlAsPdf(element, filename, title) {
   } catch (e) {
     if (e.name !== 'AbortError') showToast('تعذّرت المشاركة: ' + e.message, 'error');
   }
+}
+
+/** نافذة طلب سبب نصي احترافية — بديل كامل عن prompt() الافتراضية بالمتصفح.
+ * تُرجع Promise<string|null> — النص المُدخَل، أو null لو أُلغيت. */
+function showReasonModal(title, placeholder) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-card" style="max-width:400px">
+        <div class="modal-header">
+          <div><h3>${escapeHtml(title)}</h3></div>
+          <button type="button" class="modal-close-btn" id="reasonCloseBtn">${ICONS.close()}</button>
+        </div>
+        <div class="modal-body">
+          <div class="field"><label>السبب *</label>
+            <textarea id="reasonInput" rows="3" placeholder="${escapeHtml(placeholder || '')}"
+              style="width:100%;padding:10px 14px;border:1.5px solid var(--outline);border-radius:10px;font-family:inherit;font-size:14px;background:var(--surface);resize:vertical"></textarea>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button type="button" id="reasonCancelBtn" class="btn-outline-sm" style="flex:1;justify-content:center;padding:11px">إلغاء</button>
+            <button type="button" id="reasonOkBtn" style="flex:1">تأكيد</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('show'));
+
+    const close = (val) => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200); resolve(val); };
+    document.getElementById('reasonOkBtn').addEventListener('click', () => {
+      const val = document.getElementById('reasonInput').value.trim();
+      if (!val) { showToast('السبب مطلوب', 'error'); return; }
+      close(val);
+    });
+    document.getElementById('reasonCancelBtn').addEventListener('click', () => close(null));
+    document.getElementById('reasonCloseBtn').addEventListener('click', () => close(null));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+  });
+}
+
+/** مكوّن بحث منسدل عن طالب — قابل لإعادة الاستخدام (الفواتير، الدفعات، ولاحقاً أي صفحة تحتاجه) */
+function wireStudentAutocomplete(searchInputId, resultsBoxId, onSelect) {
+  const input = document.getElementById(searchInputId);
+  const box = document.getElementById(resultsBoxId);
+
+  const doSearch = debounce(async () => {
+    const q = input.value.trim();
+    if (q.length < 2) { box.innerHTML = ''; box.classList.remove('show'); return; }
+    try {
+      const results = await apiCall('students-finance', { method: 'POST', body: { action: 'list', search: q } });
+      const top = results.slice(0, 8);
+      box.innerHTML = top.length ? top.map((s) => `
+        <div class="search-result-item" data-student-id="${escapeHtml(s.id)}">
+          <div class="search-result-label">${escapeHtml(s.nameAr)}</div>
+          <div class="search-result-sublabel">${escapeHtml(s.grade)} — ${escapeHtml(s.section)} — ${escapeHtml(s.branch)}</div>
+        </div>`).join('') : '<p style="padding:10px 14px;color:#aaa;font-size:12.5px">لا نتائج مطابقة</p>';
+      box.classList.add('show');
+      box.querySelectorAll('[data-student-id]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const student = top.find((x) => x.id === el.getAttribute('data-student-id'));
+          box.innerHTML = ''; box.classList.remove('show'); input.value = '';
+          onSelect(student);
+        });
+      });
+    } catch (e) { /* تجاهل بصمت — البحث لا يجب يعطّل الصفحة */ }
+  }, 300);
+
+  input.addEventListener('input', doSearch);
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest(`#${searchInputId}`) && !e.target.closest(`#${resultsBoxId}`)) box.classList.remove('show');
+  });
 }
 
 /** بطاقة الملف الشخصي — تفتح من القائمة المنسدلة بالشريط العلوي */
@@ -1850,4 +1921,272 @@ async function openStatementView(student) {
   document.getElementById('stmtPrintBtn').addEventListener('click', () => printHtmlDocument(statementHtml, 'كشف حساب - ' + studentName));
   document.getElementById('stmtDownloadBtn').addEventListener('click', () => downloadHtmlAsPdf(document.getElementById('stmtPreviewArea'), `كشف_حساب_${student.id}`));
   document.getElementById('stmtShareBtn').addEventListener('click', () => shareHtmlAsPdf(document.getElementById('stmtPreviewArea'), `كشف_حساب_${student.id}`, 'كشف حساب'));
+}
+
+/* ===================== صفحة الفواتير ===================== */
+
+const INVOICE_STATUS_LABELS_MAP_ = {
+  unpaid: { l: 'غير مسدَّدة', badge: 'status-badge-unpaid' },
+  partially_paid: { l: 'مسدَّدة جزئياً', badge: 'status-badge-partial' },
+  paid: { l: 'مسدَّدة بالكامل', badge: 'status-badge-cleared' },
+  void: { l: 'مُلغاة', badge: 'status-badge-off' },
+};
+
+let invoicesSelectedStudent_ = null;
+
+async function renderInvoicesView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  let terms;
+  try {
+    terms = await apiCall('fee-settings', { method: 'POST', body: { action: 'listAcademicTerms' } });
+  } catch (e) {
+    main.innerHTML = `<div class="card"><p style="color:#C4483A">${escapeHtml(e.message)}</p></div>`;
+    return;
+  }
+  invoicesSelectedStudent_ = null;
+
+  main.innerHTML = `
+    <button type="button" class="btn-toggle-form" id="toggleIssueFormBtn">${ICONS.plus()} إصدار فاتورة جديدة</button>
+    <div class="card" id="issueFormCard" style="display:none">
+      <h2 style="margin-top:0">إصدار فاتورة جديدة</h2>
+      <div class="field autocomplete-wrap">
+        <label>ابحث عن الطالب (بالاسم أو رقم الهوية) *</label>
+        <input type="text" id="inv_studentSearch" placeholder="اكتب للبحث...">
+        <div class="search-results-box" id="inv_studentResults"></div>
+      </div>
+      <div id="inv_selectedStudentInfo" style="display:none;margin-bottom:14px"></div>
+
+      <div class="field"><label>العام الدراسي *</label><input type="text" id="inv_year" placeholder="مثال: 2025-2026"></div>
+      <div class="field"><label>الفصل الدراسي *</label><select id="inv_term">${terms.map((t) => `<option value="${t.id}">${escapeHtml(t.academic_year)} — ${escapeHtml(t.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>تاريخ الاستحقاق (اختياري)</label><input type="date" id="inv_dueDate"></div>
+
+      <label class="checkbox-item" style="margin-bottom:14px"><input type="checkbox" id="inv_useFeeStructure" checked> استخدام هيكل الرسوم المعتمد تلقائياً (حسب فرع وصف الطالب بهذا العام والفصل)</label>
+
+      <div id="inv_manualItemBox" style="display:none">
+        <div class="field"><label>وصف البند</label><input type="text" id="inv_manualDesc" placeholder="مثال: رسوم استثنائية"></div>
+        <div class="field"><label>المبلغ</label><input type="number" min="0" step="0.01" id="inv_manualAmount"></div>
+      </div>
+
+      <div class="field"><label>خصم إضافي (اختياري)</label><input type="number" min="0" step="0.01" id="inv_extraDiscount" value="0"></div>
+      <div class="field"><label>ضريبة (اختياري)</label><input type="number" min="0" step="0.01" id="inv_tax" value="0"></div>
+      <div class="field"><label>ملاحظات</label><input type="text" id="inv_notes"></div>
+
+      <button type="button" id="inv_issueBtn" style="width:100%">إصدار الفاتورة</button>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">قائمة الفواتير</h3>
+      <div class="kpi-grid" style="margin-bottom:12px">
+        <div class="field"><label>الحالة</label><select id="invf_status"><option value="">الكل</option><option value="unpaid">غير مسدَّدة</option><option value="partially_paid">مسدَّدة جزئياً</option><option value="paid">مسدَّدة بالكامل</option><option value="void">مُلغاة</option></select></div>
+        <div class="field"><label>العام الدراسي</label><input type="text" id="invf_year" placeholder="اتركه فارغاً لكل الأعوام"></div>
+      </div>
+      <button type="button" id="invf_loadBtn">تحميل</button>
+      <div id="invoicesListArea" style="margin-top:14px"></div>
+    </div>`;
+
+  document.getElementById('toggleIssueFormBtn').addEventListener('click', () => {
+    const card = document.getElementById('issueFormCard');
+    const willShow = card.style.display === 'none';
+    card.style.display = willShow ? 'block' : 'none';
+    document.getElementById('toggleIssueFormBtn').innerHTML = willShow ? `${ICONS.close()} إغلاق النموذج` : `${ICONS.plus()} إصدار فاتورة جديدة`;
+  });
+
+  wireStudentAutocomplete('inv_studentSearch', 'inv_studentResults', (student) => {
+    invoicesSelectedStudent_ = student;
+    const infoBox = document.getElementById('inv_selectedStudentInfo');
+    infoBox.style.display = 'block';
+    infoBox.innerHTML = `<span class="chip">${escapeHtml(student.nameAr)} — ${escapeHtml(student.grade)}/${escapeHtml(student.section)} — ${escapeHtml(student.branch)}<span class="chip-remove" id="inv_clearStudentBtn">${ICONS.close()}</span></span>`;
+    document.getElementById('inv_clearStudentBtn').addEventListener('click', () => {
+      invoicesSelectedStudent_ = null;
+      infoBox.style.display = 'none';
+    });
+  });
+
+  document.getElementById('inv_useFeeStructure').addEventListener('change', (e) => {
+    document.getElementById('inv_manualItemBox').style.display = e.target.checked ? 'none' : 'block';
+  });
+
+  document.getElementById('inv_issueBtn').addEventListener('click', async () => {
+    if (!invoicesSelectedStudent_) { showToast('اختر الطالب أولاً', 'error'); return; }
+    const academicYear = document.getElementById('inv_year').value.trim();
+    const termId = document.getElementById('inv_term').value;
+    if (!academicYear || !termId) { showToast('أكمل العام والفصل الدراسي', 'error'); return; }
+
+    const useFeeStructure = document.getElementById('inv_useFeeStructure').checked;
+    const body = {
+      action: 'issue', studentId: invoicesSelectedStudent_.id, academicYear, termId,
+      dueDate: document.getElementById('inv_dueDate').value || undefined,
+      extraDiscountAmount: Number(document.getElementById('inv_extraDiscount').value || 0),
+      taxAmount: Number(document.getElementById('inv_tax').value || 0),
+      notes: document.getElementById('inv_notes').value.trim(),
+      useFeeStructure,
+    };
+    if (!useFeeStructure) {
+      const desc = document.getElementById('inv_manualDesc').value.trim();
+      const amount = Number(document.getElementById('inv_manualAmount').value || 0);
+      if (!desc || amount <= 0) { showToast('أكمل وصف البند والمبلغ اليدوي', 'error'); return; }
+      body.items = [{ description: desc, amount }];
+    }
+
+    const btn = document.getElementById('inv_issueBtn');
+    btn.disabled = true; btn.textContent = 'جارِ الإصدار...';
+    try {
+      await apiCall('invoices', { method: 'POST', body });
+      showToast('تم الحفظ بنجاح — تم إصدار الفاتورة', 'success');
+      invoicesSelectedStudent_ = null;
+      document.getElementById('issueFormCard').style.display = 'none';
+      document.getElementById('toggleIssueFormBtn').innerHTML = `${ICONS.plus()} إصدار فاتورة جديدة`;
+      loadInvoicesList();
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = 'إصدار الفاتورة';
+    }
+  });
+
+  document.getElementById('invf_loadBtn').addEventListener('click', loadInvoicesList);
+  await loadInvoicesList();
+}
+
+async function loadInvoicesList() {
+  const area = document.getElementById('invoicesListArea');
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div>`;
+
+  const body = {};
+  const status = document.getElementById('invf_status').value; if (status) body.status = status;
+  const year = document.getElementById('invf_year').value.trim(); if (year) body.academicYear = year;
+
+  try {
+    const invoices = await apiCall('invoices', { method: 'POST', body: { action: 'list', ...body } });
+    renderInvoicesTable(invoices);
+  } catch (e) {
+    area.innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderInvoicesTable(invoices) {
+  const area = document.getElementById('invoicesListArea');
+  if (!invoices.length) { area.innerHTML = '<p style="color:#888">لا توجد فواتير مطابقة</p>'; return; }
+
+  area.innerHTML = invoices.map((inv) => {
+    const info = INVOICE_STATUS_LABELS_MAP_[inv.status] || { l: inv.status, badge: '' };
+    const remaining = Number(inv.total_amount) - Number(inv.paid_amount);
+    return `
+    <div class="invoice-row" data-student-id="${escapeHtml(inv.student_id)}" style="cursor:pointer">
+      <div class="invoice-row-main">
+        <div class="invoice-row-title">${escapeHtml(inv.invoice_number)}</div>
+        <div class="invoice-row-sub">${escapeHtml(inv.branch)} — ${escapeHtml(inv.grade)} — ${new Date(inv.issue_date).toLocaleDateString('ar-SA')}</div>
+      </div>
+      <div class="invoice-row-amounts">
+        <span class="status-badge ${info.badge}" style="margin-bottom:4px;display:inline-block">${escapeHtml(info.l)}</span>
+        <div>${formatMoney(inv.total_amount)}</div>
+        ${remaining > 0 && inv.status !== 'void' ? `<div class="invoice-row-remaining">متبقي: ${formatMoney(remaining)}</div>` : ''}
+      </div>
+      ${inv.status !== 'void' ? `<button type="button" class="btn-icon-delete inv-void-btn" data-id="${inv.id}" data-number="${escapeHtml(inv.invoice_number)}" title="إلغاء الفاتورة">${ICONS.trash()}</button>` : ''}
+    </div>`;
+  }).join('');
+
+  area.querySelectorAll('.invoice-row').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      openStudentFinanceCard(row.getAttribute('data-student-id'));
+    });
+  });
+  area.querySelectorAll('.inv-void-btn').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const reason = await showReasonModal(`إلغاء الفاتورة ${btn.getAttribute('data-number')}`, 'مثال: تسجيل خاطئ، تكرار...');
+      if (!reason) return;
+      try {
+        await apiCall('invoices', { method: 'POST', body: { action: 'void', invoiceId: btn.getAttribute('data-id'), reason } });
+        showToast('تم الإلغاء بنجاح', 'success');
+        loadInvoicesList();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  });
+}
+
+/* ===================== صفحة الدفعات ===================== */
+
+async function renderPaymentsView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0">البحث عن طالب لعرض/طباعة كشف حسابه</h2>
+      <div class="field autocomplete-wrap">
+        <input type="text" id="pmt_studentSearch" placeholder="اكتب اسم الطالب أو رقم الهوية...">
+        <div class="search-results-box" id="pmt_studentResults"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">قائمة الدفعات</h3>
+      <div class="kpi-grid" style="margin-bottom:12px">
+        <div class="field"><label>من تاريخ</label><input type="date" id="pmtf_from"></div>
+        <div class="field"><label>إلى تاريخ</label><input type="date" id="pmtf_to"></div>
+        <div class="field"><label>الحالة</label><select id="pmtf_status"><option value="">الكل</option><option value="confirmed">مؤكَّدة</option><option value="void">مُلغاة</option></select></div>
+      </div>
+      <button type="button" id="pmtf_loadBtn">تحميل</button>
+      <div id="paymentsListArea" style="margin-top:14px"></div>
+    </div>`;
+
+  wireStudentAutocomplete('pmt_studentSearch', 'pmt_studentResults', (student) => openStatementView(student));
+
+  document.getElementById('pmtf_loadBtn').addEventListener('click', loadPaymentsList);
+  await loadPaymentsList();
+}
+
+async function loadPaymentsList() {
+  const area = document.getElementById('paymentsListArea');
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div>`;
+
+  const body = {};
+  const dateFrom = document.getElementById('pmtf_from').value; if (dateFrom) body.dateFrom = dateFrom;
+  const dateTo = document.getElementById('pmtf_to').value; if (dateTo) body.dateTo = dateTo;
+  const status = document.getElementById('pmtf_status').value; if (status) body.status = status;
+
+  try {
+    const payments = await apiCall('payments', { method: 'POST', body: { action: 'list', ...body } });
+    renderPaymentsTable(payments);
+  } catch (e) {
+    area.innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderPaymentsTable(payments) {
+  const area = document.getElementById('paymentsListArea');
+  if (!payments.length) { area.innerHTML = '<p style="color:#888">لا توجد دفعات مطابقة</p>'; return; }
+
+  area.innerHTML = payments.map((p) => `
+    <div class="invoice-row">
+      <div class="invoice-row-main">
+        <div class="invoice-row-title">${escapeHtml(p.payment_number)}${p.status === 'void' ? ' <span style="color:#C4483A;font-weight:700">(مُلغاة)</span>' : ''}</div>
+        <div class="invoice-row-sub">${escapeHtml(p.branch)} — ${new Date(p.payment_date).toLocaleDateString('ar-SA')}</div>
+      </div>
+      <div class="invoice-row-amounts"><div style="font-weight:800">${formatMoney(p.amount)}</div></div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button type="button" class="btn-icon-edit pmt-reprint-btn" data-id="${p.id}" title="إعادة طباعة السند">${ICONS.print()}</button>
+        ${p.status !== 'void' ? `<button type="button" class="btn-icon-delete pmt-void-btn" data-id="${p.id}" data-number="${escapeHtml(p.payment_number)}" title="إلغاء الدفعة">${ICONS.trash()}</button>` : ''}
+      </div>
+    </div>`).join('');
+
+  area.querySelectorAll('.pmt-reprint-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openReceiptModal(btn.getAttribute('data-id')));
+  });
+  area.querySelectorAll('.pmt-void-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const reason = await showReasonModal(`إلغاء الدفعة ${btn.getAttribute('data-number')}`, 'مثال: خطأ بالمبلغ، تسجيل مكرَّر...');
+      if (!reason) return;
+      try {
+        await apiCall('payments', { method: 'POST', body: { action: 'void', paymentId: btn.getAttribute('data-id'), reason } });
+        showToast('تم الإلغاء بنجاح', 'success');
+        loadPaymentsList();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
 }
