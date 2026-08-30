@@ -42,15 +42,16 @@ const PAGE_REGISTRY = {
   financialPeriods: { label: 'الفترات المالية', icon: 'period', render: comingSoonRender('الفترات المالية') },
   revenuesExpenses: { label: 'الإيرادات والمصروفات', icon: 'revenue', render: comingSoonRender('الإيرادات والمصروفات') },
   payroll: { label: 'الرواتب', icon: 'payroll', render: comingSoonRender('الرواتب') },
-  financeStaff: { label: 'موظفو المالية', icon: 'staff', render: comingSoonRender('موظفو المالية') },
+  financeStaff: { label: 'موظفو المالية', icon: 'staff', render: renderFinanceStaffView },
+  users: { label: 'المستخدمون', icon: 'users', render: renderUsersView },
   feeSettings: { label: 'الإعدادات', icon: 'settings', render: comingSoonRender('الإعدادات') },
   auditLog: { label: 'سجل التدقيق', icon: 'audit', render: comingSoonRender('سجل التدقيق') },
 };
 
 /** أي دور غير مذكور هنا يحصل تلقائياً على "الرئيسية" فقط */
 const ROLE_PAGES = {
-  role_admin: ['home', 'students', 'invoices', 'payments', 'collection', 'reconciliation', 'financialPeriods', 'revenuesExpenses', 'payroll', 'financeStaff', 'feeSettings', 'auditLog'],
-  role_finance_admin: ['home', 'students', 'invoices', 'payments', 'collection', 'reconciliation', 'financialPeriods', 'revenuesExpenses', 'payroll', 'financeStaff', 'feeSettings', 'auditLog'],
+  role_admin: ['home', 'students', 'invoices', 'payments', 'collection', 'reconciliation', 'financialPeriods', 'revenuesExpenses', 'payroll', 'financeStaff', 'users', 'feeSettings', 'auditLog'],
+  role_finance_admin: ['home', 'students', 'invoices', 'payments', 'collection', 'reconciliation', 'financialPeriods', 'revenuesExpenses', 'payroll', 'financeStaff', 'users', 'feeSettings', 'auditLog'],
   role_accountant: ['home', 'students', 'invoices', 'payments', 'revenuesExpenses', 'payroll'],
   role_collection_monitor: ['home', 'collection', 'reconciliation'],
 };
@@ -66,7 +67,7 @@ const SIDEBAR_GROUPS = [
   { type: 'group', label: 'الطلاب والفواتير', icon: 'students', items: ['students', 'invoices', 'payments'] },
   { type: 'group', label: 'التحصيل والرقابة', icon: 'branches', items: ['collection', 'reconciliation'] },
   { type: 'group', label: 'المالية', icon: 'revenue', items: ['revenuesExpenses', 'payroll', 'financialPeriods'] },
-  { type: 'group', label: 'الإدارة والإعدادات', icon: 'settings', items: ['financeStaff', 'feeSettings', 'auditLog'] },
+  { type: 'group', label: 'الإدارة والإعدادات', icon: 'settings', items: ['financeStaff', 'users', 'feeSettings', 'auditLog'] },
 ];
 
 /* ===================== نقطة الانطلاق ===================== */
@@ -490,4 +491,350 @@ async function renderHomeView() {
   } catch (e) {
     main.innerHTML = `<div class="card"><p style="color:#C4483A">${escapeHtml(e.message)}</p></div>`;
   }
+}
+
+/* ===================== مساعدات مشتركة بين صفحات "الأشخاص" ===================== */
+
+/** نفس أسلوب موقع الموظفين بالضبط — تحويل تقريبي (وليس ترجمة حقيقية) للاسم العربي لحروف إنجليزية،
+ * كمقترح أولي فقط يقدر المستخدم يعدّله بأي وقت. */
+const ARABIC_TO_LATIN_MAP_ = {
+  'ا': 'a', 'أ': 'a', 'إ': 'i', 'آ': 'aa', 'ى': 'a', 'ب': 'b', 'ت': 't', 'ث': 'th',
+  'ج': 'j', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'th', 'ر': 'r', 'ز': 'z', 'س': 's',
+  'ش': 'sh', 'ص': 's', 'ض': 'd', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f',
+  'ق': 'q', 'ك': 'k', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ه': 'h', 'و': 'w', 'ي': 'y',
+  'ة': 'ah', 'ء': 'a', 'ئ': 'e', 'ؤ': 'o', ' ': ' ',
+};
+function transliterateArabicToEnglish(text) {
+  const letters = text.trim().split('').map((ch) => ARABIC_TO_LATIN_MAP_[ch] ?? '').join('');
+  return letters.split(' ').filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function collectCheckedValues(selector) {
+  return Array.from(document.querySelectorAll(selector)).filter((el) => el.checked).map((el) => el.value);
+}
+
+function branchCheckboxesHtml(branches, selected, cls) {
+  return branches.map((b) => `
+    <label class="checkbox-item">
+      <input type="checkbox" class="${cls}" value="${escapeHtml(b)}" ${selected.includes(b) ? 'checked' : ''}> ${escapeHtml(b)}
+    </label>`).join('');
+}
+
+/** قائمة الفروع المركزية — تُجلَب مرة واحدة فقط طوال الجلسة */
+async function getBranchesOnce() {
+  if (!APP.allBranches) {
+    APP.allBranches = await apiCall('fee-settings', { method: 'POST', body: { action: 'listBranches' } });
+  }
+  return APP.allBranches;
+}
+
+const FINANCE_STAFF_ROLE_OPTIONS_ = [
+  { v: 'role_finance_admin', l: 'أدمن الإدارة المالية' },
+  { v: 'role_accountant', l: 'محاسب' },
+  { v: 'role_collection_monitor', l: 'مراقب الفروع والتحصيل' },
+];
+
+/** يجلب قائمة موظفي المالية — تُستخدَم من صفحتَي "موظفو المالية" و"المستخدمون" معاً (نفس الإجراء بالباك إند) */
+async function loadFinanceStaffList() {
+  APP.allFinanceStaff = await apiCall('finance-staff', { method: 'POST', body: { action: 'list' } });
+}
+
+/* ===================== صفحة موظفي المالية (إضافة/تعديل/حذف) ===================== */
+
+async function renderFinanceStaffView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>`;
+
+  let branches;
+  try {
+    branches = await getBranchesOnce();
+  } catch (e) {
+    main.innerHTML = `<div class="card"><p style="color:#C4483A">${escapeHtml(e.message)}</p></div>`;
+    return;
+  }
+
+  main.innerHTML = `
+    <button type="button" class="btn-toggle-form" id="toggleStaffFormBtn">${ICONS.plus()} إضافة موظف مالية جديد</button>
+    <div class="card" id="staffFormCard" style="display:none">
+      <h2 id="staffFormTitle">إضافة موظف مالية جديد</h2>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">* الاسم والدور والفرع إجبارية</p>
+      <form id="addStaffForm">
+        <input type="hidden" id="staff_editId" value="">
+        <div class="field"><label>الاسم بالعربي *</label><input id="staff_nameAr" type="text" required></div>
+        <div class="field"><label>الاسم بالإنجليزي <span style="font-weight:400;color:#888;font-size:11.5px">(تحويل تقريبي تلقائي، قابل للتعديل)</span></label><input id="staff_nameEn" type="text"></div>
+        <div class="field" id="staff_nationalIdField"><label>رقم الهوية/الإقامة *</label><input id="staff_nationalId" type="text" maxlength="20" required></div>
+        <div class="field"><label>الدور *</label>
+          <select id="staff_role" required>
+            <option value="" disabled selected>-- اختر الدور --</option>
+            ${FINANCE_STAFF_ROLE_OPTIONS_.map((o) => `<option value="${o.v}">${escapeHtml(o.l)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>الجنس</label>
+          <select id="staff_gender"><option value="">-- غير محدَّد --</option><option value="ذكر">ذكر</option><option value="أنثى">أنثى</option></select>
+        </div>
+        <div class="filter-card-title">الفرع/الفروع * (يمكن اختيار أكثر من فرع لمراقب الفروع والتحصيل)</div>
+        <div class="checkbox-list" id="staff_branchesBox">${branchCheckboxesHtml(branches, [], 'staff-branch-cb')}</div>
+
+        <button type="submit" id="addStaffBtn" style="margin-top:14px">إضافة الموظف</button>
+        <button type="button" id="cancelStaffEditBtn" style="display:none;background:#888;margin-top:8px">إلغاء التعديل</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>قائمة موظفي المالية</h3>
+      <div class="field"><label>بحث بالاسم أو الدور أو الفرع</label><input id="staffSearchInput" type="text"></div>
+      <div id="staffListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('toggleStaffFormBtn').addEventListener('click', () => {
+    const card = document.getElementById('staffFormCard');
+    const willShow = card.style.display === 'none';
+    card.style.display = willShow ? 'block' : 'none';
+    document.getElementById('toggleStaffFormBtn').innerHTML = willShow ? `${ICONS.close()} إغلاق النموذج` : `${ICONS.plus()} إضافة موظف مالية جديد`;
+    if (!willShow) resetStaffForm();
+  });
+
+  document.getElementById('staff_nameAr').addEventListener('blur', () => {
+    const enField = document.getElementById('staff_nameEn');
+    if (!enField.value.trim()) enField.value = transliterateArabicToEnglish(document.getElementById('staff_nameAr').value);
+  });
+
+  document.getElementById('addStaffForm').addEventListener('submit', saveStaffHandler);
+  document.getElementById('cancelStaffEditBtn').addEventListener('click', resetStaffForm);
+  document.getElementById('staffSearchInput').addEventListener('input', renderStaffTable);
+
+  try {
+    await loadFinanceStaffList();
+    renderStaffTable();
+  } catch (e) {
+    document.getElementById('staffListArea').innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function resetStaffForm() {
+  document.getElementById('addStaffForm').reset();
+  document.getElementById('staff_editId').value = '';
+  document.getElementById('staff_nationalIdField').style.display = 'block';
+  document.getElementById('staff_nationalId').required = true;
+  document.getElementById('staffFormTitle').textContent = 'إضافة موظف مالية جديد';
+  document.getElementById('addStaffBtn').textContent = 'إضافة الموظف';
+  document.getElementById('cancelStaffEditBtn').style.display = 'none';
+  document.querySelectorAll('.staff-branch-cb').forEach((cb) => { cb.checked = false; });
+  document.getElementById('staffFormCard').style.display = 'none';
+  document.getElementById('toggleStaffFormBtn').innerHTML = `${ICONS.plus()} إضافة موظف مالية جديد`;
+}
+
+function startEditStaff(emp) {
+  document.getElementById('staffFormCard').style.display = 'block';
+  document.getElementById('toggleStaffFormBtn').innerHTML = `${ICONS.close()} إغلاق النموذج`;
+  document.getElementById('staff_editId').value = emp.id;
+  document.getElementById('staff_nameAr').value = emp.nameAr;
+  document.getElementById('staff_nameEn').value = emp.nameEn || '';
+  document.getElementById('staff_nationalIdField').style.display = 'none'; // لا يُعدَّل رقم الهوية بعد الإنشاء
+  document.getElementById('staff_nationalId').required = false;
+  document.getElementById('staff_role').value = emp.role;
+  document.getElementById('staff_gender').value = emp.gender || '';
+  document.querySelectorAll('.staff-branch-cb').forEach((cb) => { cb.checked = emp.allBranches.includes(cb.value); });
+
+  document.getElementById('staffFormTitle').textContent = 'تعديل بيانات: ' + emp.nameAr;
+  document.getElementById('addStaffBtn').textContent = 'حفظ التعديلات';
+  document.getElementById('cancelStaffEditBtn').style.display = 'inline-block';
+  document.getElementById('staffFormCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function saveStaffHandler(e) {
+  e.preventDefault();
+  const editId = document.getElementById('staff_editId').value;
+  const btn = document.getElementById('addStaffBtn');
+
+  const branches = collectCheckedValues('.staff-branch-cb');
+  if (!branches.length) { showToast('اختر فرعاً واحداً على الأقل', 'error'); return; }
+
+  const body = {
+    nameAr: document.getElementById('staff_nameAr').value.trim(),
+    nameEn: document.getElementById('staff_nameEn').value.trim(),
+    role: document.getElementById('staff_role').value,
+    gender: document.getElementById('staff_gender').value,
+    branches,
+  };
+  if (!editId) body.nationalId = document.getElementById('staff_nationalId').value.trim();
+
+  btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+  try {
+    if (editId) {
+      await apiCall('finance-staff', { method: 'POST', body: { action: 'update', id: editId, ...body } });
+      showToast('تم تحديث بيانات الموظف بنجاح', 'success');
+    } else {
+      await apiCall('finance-staff', { method: 'POST', body: { action: 'add', ...body } });
+      showToast('تم إضافة الموظف بنجاح — كلمة المرور المبدئية هي رقم الهوية', 'success');
+    }
+    resetStaffForm();
+    await loadFinanceStaffList();
+    renderStaffTable();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = editId ? 'حفظ التعديلات' : 'إضافة الموظف';
+  }
+}
+
+function renderStaffTable() {
+  const area = document.getElementById('staffListArea');
+  const q = (document.getElementById('staffSearchInput').value || '').trim().toLowerCase();
+  const list = (APP.allFinanceStaff || []).filter((e) => {
+    if (!q) return true;
+    return e.nameAr.toLowerCase().includes(q) ||
+      (ROLE_LABELS_AR[e.role] || e.role).toLowerCase().includes(q) ||
+      e.allBranches.some((b) => b.toLowerCase().includes(q));
+  });
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد موظفو مالية مطابقون</p>'; return; }
+
+  area.innerHTML = `<div class="person-card-grid">${list.map((e) => `
+    <div class="person-card">
+      <div class="person-card-header">
+        <span class="person-avatar">${escapeHtml((e.nameAr || '؟').trim().charAt(0))}</span>
+        <div class="person-card-info">
+          <div class="person-card-name">${escapeHtml(e.nameAr)}</div>
+          <div class="person-card-role">${escapeHtml(ROLE_LABELS_AR[e.role] || e.role)}</div>
+        </div>
+      </div>
+      <div class="person-card-body">
+        <div class="person-card-row"><span>الفروع</span><span>${escapeHtml(e.allBranches.join('، '))}</span></div>
+      </div>
+      <div class="person-card-footer">
+        <div class="person-card-actions">
+          <button type="button" class="btn-icon-edit" data-id="${escapeHtml(e.id)}">${ICONS.edit()}</button>
+          <button type="button" class="btn-icon-delete" data-id="${escapeHtml(e.id)}" data-name="${escapeHtml(e.nameAr)}">${ICONS.trash()}</button>
+        </div>
+      </div>
+    </div>`).join('')}</div>`;
+
+  area.querySelectorAll('.btn-icon-edit').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const emp = APP.allFinanceStaff.find((x) => x.id === btn.getAttribute('data-id'));
+      if (emp) startEditStaff(emp);
+    });
+  });
+  area.querySelectorAll('.btn-icon-delete').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const name = btn.getAttribute('data-name');
+      if (!confirm(`تأكيد حذف الموظف "${name}"؟ سيُعطَّل حسابه فوراً.`)) return;
+      try {
+        await apiCall('finance-staff', { method: 'POST', body: { action: 'delete', id: btn.getAttribute('data-id') } });
+        showToast('تم حذف الموظف بنجاح', 'success');
+        await loadFinanceStaffList();
+        renderStaffTable();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
+}
+
+/* ===================== صفحة المستخدمين (إدارة الحسابات: تفعيل/تعطيل/إعادة تعيين كلمة مرور) ===================== */
+
+async function renderUsersView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>`;
+
+  main.innerHTML = `
+    <div class="card">
+      <h3>حسابات الدخول</h3>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">لإضافة موظف جديد (وحسابه تلقائياً معه)، استخدم صفحة "موظفو المالية"</p>
+      <div class="field"><label>بحث بالاسم أو اسم المستخدم</label><input id="userSearchInput" type="text"></div>
+      <div id="usersListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('userSearchInput').addEventListener('input', renderUsersTable);
+
+  try {
+    await loadFinanceStaffList();
+    renderUsersTable();
+  } catch (e) {
+    document.getElementById('usersListArea').innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderUsersTable() {
+  const area = document.getElementById('usersListArea');
+  const q = (document.getElementById('userSearchInput').value || '').trim().toLowerCase();
+  const list = (APP.allFinanceStaff || []).filter((u) => !q || u.nameAr.toLowerCase().includes(q) || u.nationalId.toLowerCase().includes(q));
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد حسابات مطابقة</p>'; return; }
+
+  area.innerHTML = `<div class="person-card-grid">${list.map((u) => {
+    const isActive = u.status === 'active';
+    return `
+    <div class="person-card" data-id="${escapeHtml(u.id)}" data-card-clickable>
+      <div class="person-card-header">
+        <span class="person-avatar">${escapeHtml((u.nameAr || '؟').trim().charAt(0))}</span>
+        <div class="person-card-info">
+          <div class="person-card-name">${escapeHtml(u.nameAr)}</div>
+          <div class="person-card-role">${escapeHtml(ROLE_LABELS_AR[u.role] || u.role)}</div>
+        </div>
+        <span class="status-badge ${isActive ? 'status-badge-on' : 'status-badge-off'}">
+          <span class="status-dot ${isActive ? 'status-dot-on' : 'status-dot-off'}"></span>${isActive ? 'مفعَّل' : 'معطَّل'}
+        </span>
+      </div>
+      <div class="person-card-body">
+        <div class="person-card-row"><span>اسم المستخدم</span><span>${escapeHtml(u.nationalId)}</span></div>
+        <div class="person-card-row"><span>آخر دخول</span><span>${u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString('ar') : 'لم يسجّل بعد'}</span></div>
+      </div>
+      <div class="person-card-footer">
+        <div class="person-card-actions">
+          <button type="button" class="btn-outline-sm ${isActive ? 'btn-danger-outline' : ''}" data-id="${escapeHtml(u.id)}" data-new-status="${isActive ? 'inactive' : 'active'}">
+            ${isActive ? 'تعطيل' : 'تفعيل'}
+          </button>
+          <button type="button" class="btn-reset-staff-pass btn-outline-sm" data-id="${escapeHtml(u.id)}" data-name="${escapeHtml(u.nameAr)}">${ICONS.key()} إعادة تعيين</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+
+  area.querySelectorAll('[data-card-clickable]').forEach((card) => {
+    card.addEventListener('click', (evt) => {
+      if (evt.target.closest('button')) return; // الأزرار لها معالجاتها الخاصة، لا تفتح النافذة كمان
+      const u = APP.allFinanceStaff.find((x) => x.id === card.getAttribute('data-id'));
+      if (!u) return;
+      showDetailModal(u.nameAr, ROLE_LABELS_AR[u.role] || u.role, [
+        { label: 'اسم المستخدم', value: u.nationalId },
+        { label: 'الدور (الصلاحية)', value: ROLE_LABELS_AR[u.role] || u.role },
+        { label: 'الفروع', value: u.allBranches.join('، ') },
+        { label: 'حالة الحساب', value: u.status === 'active' ? 'مفعَّل' : 'معطَّل' },
+        { label: 'آخر دخول', value: u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('ar') : null },
+        { label: 'تاريخ الإنشاء', value: u.createdAt ? new Date(u.createdAt).toLocaleDateString('ar') : null },
+      ]);
+    });
+  });
+
+  area.querySelectorAll('[data-new-status]').forEach((btn) => {
+    btn.addEventListener('click', async (evt) => {
+      evt.stopPropagation();
+      const newStatus = btn.getAttribute('data-new-status');
+      if (!confirm(newStatus === 'active' ? 'تأكيد تفعيل هذا الحساب؟' : 'تأكيد تعطيل هذا الحساب؟')) return;
+      try {
+        await apiCall('finance-staff', { method: 'POST', body: { action: 'toggleStatus', id: btn.getAttribute('data-id'), newStatus } });
+        showToast(newStatus === 'active' ? 'تم التفعيل' : 'تم التعطيل', 'success');
+        await loadFinanceStaffList();
+        renderUsersTable();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
+
+  area.querySelectorAll('.btn-reset-staff-pass').forEach((btn) => {
+    btn.addEventListener('click', async (evt) => {
+      evt.stopPropagation();
+      const name = btn.getAttribute('data-name');
+      if (!confirm(`إعادة تعيين كلمة مرور "${name}" لرقم هويته الأصلي؟`)) return;
+      try {
+        const result = await apiCall('finance-staff', { method: 'POST', body: { action: 'resetPassword', id: btn.getAttribute('data-id') } });
+        showToast('تمت إعادة التعيين — كلمة المرور الجديدة: ' + result.tempPassword, 'success');
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
 }
