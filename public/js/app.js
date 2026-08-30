@@ -170,6 +170,13 @@ function bootDashboard() {
   navigate('home');
 }
 
+function computeBranchLabel(user) {
+  const isFullAccess = user.role === 'role_admin' || user.role === 'role_finance_admin';
+  if (isFullAccess) return 'كل الفروع';
+  const branches = (user.allBranches && user.allBranches.length) ? user.allBranches : [user.branch];
+  return branches.length > 1 ? `${branches.length} فروع` : (branches[0] || '');
+}
+
 function renderShell() {
   const nameInitial = (APP.user.fullName || '?').trim().charAt(0);
   document.getElementById('app').innerHTML = `
@@ -177,8 +184,9 @@ function renderShell() {
       <div class="sidebar-overlay" id="sidebarOverlay"></div>
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-          ${ICONS.logo()}<span>الإدارة المالية</span>
-          <button type="button" class="sidebar-close-btn" id="sidebarCloseBtn">${ICONS.close()}</button>
+          ${ICONS.logo()}<span class="brand-text">الإدارة المالية</span>
+          <button type="button" class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="طي القائمة">${ICONS.chevronDown()}</button>
+          <button type="button" class="sidebar-close-btn" id="sidebarCloseBtn" title="إغلاق القائمة">${ICONS.close()}</button>
         </div>
         <nav id="sidebarNav"></nav>
       </aside>
@@ -186,10 +194,16 @@ function renderShell() {
         <header class="app-header">
           <div class="header-start">
             <button class="menu-toggle-btn" id="menuToggleBtn">${ICONS.menu()}</button>
-            <div class="header-brand-mobile">${ICONS.logo()}<span>الإدارة المالية</span></div>
             <div class="app-header-title" id="pageTitle">الرئيسية</div>
           </div>
-          <div class="header-branch-label">${escapeHtml(APP.user.branch || '')}</div>
+          <div class="header-school-brand" id="headerSchoolBrand">
+            <div class="header-school-logo-fallback" id="headerSchoolLogoFallback">${ICONS.logo()}</div>
+            <img class="header-school-logo-img" id="headerSchoolLogoImg" style="display:none" alt="">
+            <div class="header-school-text">
+              <div class="header-school-name" id="headerSchoolName">...</div>
+              <div class="header-school-branch" id="headerSchoolBranch">${escapeHtml(computeBranchLabel(APP.user))}</div>
+            </div>
+          </div>
           <div class="header-user" id="headerUser">
             <div class="user-avatar">${escapeHtml(nameInitial)}</div>
             <div class="user-name">${escapeHtml(APP.user.fullName)}</div>
@@ -213,15 +227,26 @@ function renderShell() {
   const lastView = localStorage.getItem('finance_lastView');
   renderGroupedSidebarNav(pages, lastView && pages.includes(lastView) ? lastView : pages[0]);
   renderBottomNav();
+  loadHeaderSchoolInfo();
 
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebarOverlay');
-  const openSidebar = () => { sidebar.classList.add('open'); overlay.classList.add('show'); };
+  const openSidebarMobile = () => { sidebar.classList.add('open'); overlay.classList.add('show'); };
+
   document.getElementById('menuToggleBtn').addEventListener('click', () => {
-    sidebar.classList.contains('open') ? closeSidebarMobile() : openSidebar();
+    sidebar.classList.contains('open') ? closeSidebarMobile() : openSidebarMobile();
   });
   document.getElementById('sidebarCloseBtn').addEventListener('click', closeSidebarMobile);
   overlay.addEventListener('click', closeSidebarMobile);
+
+  // 🆕 طي/بسط القائمة الجانبية بسطح المكتب — يتذكّر اختيار المستخدم
+  const collapseBtn = document.getElementById('sidebarCollapseBtn');
+  if (localStorage.getItem('finance_sidebar_collapsed') === 'true') sidebar.classList.add('collapsed');
+  collapseBtn.addEventListener('click', () => {
+    const willCollapse = !sidebar.classList.contains('collapsed');
+    sidebar.classList.toggle('collapsed', willCollapse);
+    localStorage.setItem('finance_sidebar_collapsed', String(willCollapse));
+  });
 
   // قائمة حساب المستخدم المنسدلة
   document.getElementById('headerUser').addEventListener('click', (e) => {
@@ -233,9 +258,30 @@ function renderShell() {
   document.getElementById('openProfileInfoBtn').addEventListener('click', openMyProfileModal);
 }
 
+/** يجلب شعار المدرسة واسمها الحقيقيَّين (site_settings المركزي) — مرة واحدة فقط، تُخزَّن بذاكرة الجلسة */
+async function loadHeaderSchoolInfo() {
+  try {
+    if (!APP.siteInfo) {
+      APP.siteInfo = await apiCall('fee-settings', { method: 'POST', body: { action: 'getSiteInfo' }, requiresAuth: false });
+    }
+    document.getElementById('headerSchoolName').textContent = APP.siteInfo.schoolName || 'منصة مِرقاة';
+    if (APP.siteInfo.logoUrl) {
+      const img = document.getElementById('headerSchoolLogoImg');
+      img.src = APP.siteInfo.logoUrl;
+      img.onload = () => {
+        img.style.display = 'block';
+        document.getElementById('headerSchoolLogoFallback').style.display = 'none';
+      };
+    }
+  } catch (e) {
+    document.getElementById('headerSchoolName').textContent = 'منصة مِرقاة';
+  }
+}
+
 function closeSidebarMobile() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sidebarOverlay').classList.remove('show');
+  document.querySelector('#bottomNav a[data-bottom-key="more"]')?.classList.remove('active');
 }
 
 function renderGroupedSidebarNav(pages, activeView) {
@@ -262,6 +308,12 @@ function renderGroupedSidebarNav(pages, activeView) {
 
   nav.querySelectorAll('[data-group-toggle]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar.classList.contains('collapsed')) {
+        // 🆕 القائمة مطويّة (أيقونات فقط) — بسّطها أولاً حتى تظهر عناصر المجموعة
+        sidebar.classList.remove('collapsed');
+        localStorage.setItem('finance_sidebar_collapsed', 'false');
+      }
       const itemsBox = btn.nextElementSibling;
       const willOpen = itemsBox.style.display !== 'block';
       itemsBox.style.display = willOpen ? 'block' : 'none';
@@ -291,7 +343,15 @@ function renderBottomNav() {
   document.querySelectorAll('#bottomNav a').forEach((a) => {
     a.addEventListener('click', () => {
       const key = a.getAttribute('data-bottom-key');
-      if (key === 'more') { document.getElementById('sidebar').classList.add('open'); document.getElementById('sidebarOverlay').classList.add('show'); return; }
+      if (key === 'more') {
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebarOverlay');
+        const isOpen = sidebar.classList.contains('open');
+        sidebar.classList.toggle('open', !isOpen);
+        overlay.classList.toggle('show', !isOpen);
+        a.classList.toggle('active', !isOpen);
+        return;
+      }
       const isReady = a.getAttribute('data-ready') === 'true';
       if (!isReady) { showToast('قريباً — هذي الصفحة لم تُبنَ بعد', 'error'); return; }
       navigate(key);
