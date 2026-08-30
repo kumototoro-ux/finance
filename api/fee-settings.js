@@ -220,9 +220,30 @@ async function handleListBranches(req, res) {
   return res.status(200).json({ success: true, data: (data || []).map((r) => r.value) });
 }
 
+/* -------------------- الفصول الدراسية والصفوف المركزية (مصادقة أساسية فقط) -------------------- */
+async function handleListAcademicTerms(req, res) {
+  requireAuth(req);
+  const { data, error } = await supabaseAdmin
+    .from('academic_terms')
+    .select('id, name, term_number, academic_year, start_date, end_date, is_visible')
+    .order('academic_year', { ascending: false })
+    .order('term_number');
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+async function handleListGrades(req, res) {
+  requireAuth(req);
+  const { data, error } = await supabaseAdmin.from('settings_lists').select('value').eq('list_key', 'grades').order('sort_order');
+  if (error) throw error;
+  return res.status(200).json({ success: true, data: (data || []).map((r) => r.value) });
+}
+
 export default createRouter({
   getSiteInfo: handleGetSiteInfo,
   listBranches: handleListBranches,
+  listAcademicTerms: handleListAcademicTerms,
+  listGrades: handleListGrades,
 
   // بنود الرسوم
   listFeeItems: feeItems.list,
