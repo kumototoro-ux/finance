@@ -197,7 +197,22 @@ async function handleToggleAccountActive(req, res) {
   return res.status(200).json({ success: true, data: true });
 }
 
+/* -------------------- معلومات المدرسة العامة (بلا مصادقة إلزامية) -------------------- */
+// ⚠️ site_settings جدول مركزي مشترك مملوك لموقع الموظفين — قراءة فقط
+// هنا، بلا أي كتابة عليه إطلاقاً من موقع المالية. يُستخدَم لعرض شعار
+// المدرسة واسمها الحقيقيَّين بالشريط العلوي (بدل شعار المنصة المكرَّر).
+async function handleGetSiteInfo(req, res) {
+  const { data, error } = await supabaseAdmin.from('site_settings').select('school_name, logo_url').eq('id', 1).maybeSingle();
+  if (error) throw error;
+  return res.status(200).json({
+    success: true,
+    data: { schoolName: data?.school_name || null, logoUrl: data?.logo_url || null },
+  });
+}
+
 export default createRouter({
+  getSiteInfo: handleGetSiteInfo,
+
   // بنود الرسوم
   listFeeItems: feeItems.list,
   addFeeItem: feeItems.add,
