@@ -34,7 +34,7 @@ function comingSoonRender(label) {
 
 const PAGE_REGISTRY = {
   home: { label: 'الرئيسية', icon: 'home', render: renderHomeView },
-  students: { label: 'الطلاب', icon: 'students', render: comingSoonRender('الطلاب') },
+  students: { label: 'الطلاب', icon: 'students', render: renderStudentsView },
   invoices: { label: 'الفواتير', icon: 'invoice', render: comingSoonRender('الفواتير') },
   payments: { label: 'الدفعات', icon: 'payment', render: comingSoonRender('الدفعات') },
   collection: { label: 'التحصيل والرقابة', icon: 'branches', render: comingSoonRender('التحصيل والرقابة') },
@@ -428,6 +428,81 @@ function showConfirmModal(message, confirmLabel, cancelLabel) {
   });
 }
 
+/** نافذة نموذج عامة — نفس شكل showDetailModal لكن بمحتوى HTML خام (نماذج تفاعلية). */
+function showFormModal(title, subtitle, bodyHtml, extraClass) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card ${extraClass || ''}">
+      <div class="modal-header">
+        <div><h3>${escapeHtml(title)}</h3>${subtitle ? `<p class="modal-subtitle">${escapeHtml(subtitle)}</p>` : ''}</div>
+        <button type="button" class="modal-close-btn" id="formModalCloseBtn">${ICONS.close()}</button>
+      </div>
+      <div class="modal-body">${bodyHtml}</div>
+    </div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('show'));
+
+  const close = () => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200); };
+  document.getElementById('formModalCloseBtn').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  return { overlay, close };
+}
+
+function debounce(fn, delay) {
+  let timer;
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); };
+}
+
+function todayISODate() { return new Date().toISOString().slice(0, 10); }
+
+/** طباعة أي مستند (سند/كشف حساب) بنافذة منفصلة نظيفة — بلا تداخل مع تصميم الموقع الأساسي */
+function printHtmlDocument(innerHtml, title) {
+  const win = window.open('', '_blank');
+  if (!win) { showToast('يرجى السماح بالنوافذ المنبثقة بالمتصفح للطباعة', 'error'); return; }
+  win.document.write(`<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>${title}</title>
+    <style>body{margin:0;padding:24px;background:#fff}@media print{body{padding:0}}</style></head>
+    <body>${innerHtml}</body></html>`);
+  win.document.close();
+  win.focus();
+  // تأخير بسيط لضمان تحميل شعار المدرسة (صورة) قبل استدعاء الطباعة
+  setTimeout(() => { win.print(); }, 400);
+}
+
+/** تنزيل عنصر HTML كملف PDF حقيقي عالي الجودة (html2pdf.js — Canvas مضاعف الدقة) */
+async function downloadHtmlAsPdf(element, filename) {
+  showToast('جارِ تجهيز الملف...', 'success');
+  try {
+    await html2pdf().set({
+      margin: 8, filename: `${filename}.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+    }).from(element).save();
+  } catch (e) {
+    showToast('تعذّر إنشاء الملف: ' + e.message, 'error');
+  }
+}
+
+/** مشاركة عنصر HTML كملف PDF عبر Web Share API (واتساب وأي تطبيق آخر يدعم استقبال ملفات) */
+async function shareHtmlAsPdf(element, filename, title) {
+  try {
+    const pdfBlob = await html2pdf().set({
+      margin: 8, image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+    }).from(element).outputPdf('blob');
+    const file = new File([pdfBlob], `${filename}.pdf`, { type: 'application/pdf' });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title });
+    } else {
+      showToast('المشاركة المباشرة غير مدعومة بهذا المتصفح — حمِّل الملف ثم شاركه يدوياً', 'error');
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') showToast('تعذّرت المشاركة: ' + e.message, 'error');
+  }
+}
+
 /** بطاقة الملف الشخصي — تفتح من القائمة المنسدلة بالشريط العلوي */
 function openMyProfileModal() {
   const u = APP.user;
@@ -558,6 +633,22 @@ async function getBranchesOnce() {
     APP.allBranches = await apiCall('fee-settings', { method: 'POST', body: { action: 'listBranches' } });
   }
   return APP.allBranches;
+}
+
+/** قائمة الصفوف المركزية — تُجلَب مرة واحدة فقط طوال الجلسة */
+async function getGradesOnce() {
+  if (!APP.allGrades) {
+    APP.allGrades = await apiCall('fee-settings', { method: 'POST', body: { action: 'listGrades' } });
+  }
+  return APP.allGrades;
+}
+
+/** قائمة الشعب المركزية — تُجلَب مرة واحدة فقط طوال الجلسة */
+async function getSectionsOnce() {
+  if (!APP.allSections) {
+    APP.allSections = await apiCall('fee-settings', { method: 'POST', body: { action: 'listSections' } });
+  }
+  return APP.allSections;
 }
 
 const FINANCE_STAFF_ROLE_OPTIONS_ = [
@@ -1135,16 +1226,21 @@ async function renderFeeStructureSection_(content) {
   }
 
   content.innerHTML = `
-    <h2 style="margin-top:0">تعيين رسم جديد</h2>
-    <p style="color:#888;font-size:12.5px;margin-top:-10px">اختر بند الرسم والمبلغ، ثم حدِّد أي نطاق يشمله — من الأعمّ (كل الفروع) للأخصّ (صف واحد بفرع واحد)</p>
+    <h2 style="margin-top:0">رسوم الفروع والصفوف</h2>
+    <p style="color:#888;font-size:12.5px;margin-top:-10px">حدِّد العام والفصل الدراسي أولاً (يُستخدَمان بالقسمين أسفله معاً)</p>
+    <div class="field"><label>العام الدراسي *</label><input type="text" id="fs_sharedYear" placeholder="مثال: 2025-2026" value="${escapeHtml(feeStructureFilters_.academicYear)}"></div>
+    <label class="checkbox-item" style="margin-bottom:16px"><input type="checkbox" id="fsb_wholeYear"> عند التعيين أدناه: تطبيق على العام الدراسي كاملاً (كل الفصول دفعة واحدة)</label>
+    <div class="field" id="fs_sharedTermField"><label>الفصل الدراسي *</label>
+      <select id="fs_sharedTerm">${terms.map((t) => `<option value="${t.id}" ${String(t.id) === String(feeStructureFilters_.termId) ? 'selected' : ''}>${escapeHtml(t.academic_year)} — ${escapeHtml(t.name)}</option>`).join('')}</select>
+    </div>
+
+    <hr style="margin:24px 0;border-color:var(--outline)">
+
+    <h3 style="margin-top:0">تعيين رسم جديد</h3>
+    <p style="color:#888;font-size:12.5px;margin-top:-8px">اختر بند الرسم والمبلغ، ثم حدِّد أي نطاق يشمله — من الأعمّ (كل الفروع) للأخصّ (صف واحد بفرع واحد)</p>
 
     <div class="field"><label>بند الرسم *</label><select id="fsb_feeItem">${activeFeeItems.map((i) => `<option value="${i.id}">${escapeHtml(i.name)}</option>`).join('')}</select></div>
     <div class="field"><label>المبلغ (ريال) *</label><input type="number" min="0" step="0.01" id="fsb_amount" placeholder="0.00"></div>
-    <div class="field"><label>العام الدراسي *</label><input type="text" id="fsb_year" placeholder="مثال: 2025-2026"></div>
-
-    <label class="checkbox-item" style="margin-bottom:16px"><input type="checkbox" id="fsb_wholeYear"> تطبيق على العام الدراسي كاملاً (كل الفصول الدراسية دفعة واحدة)</label>
-
-    <div class="field" id="fsb_termField"><label>الفصل الدراسي *</label><select id="fsb_term">${terms.map((t) => `<option value="${t.id}">${escapeHtml(t.academic_year)} — ${escapeHtml(t.name)}</option>`).join('')}</select></div>
 
     <div class="filter-card-title">نطاق التطبيق</div>
     <div class="checkbox-list" style="margin-bottom:16px">
@@ -1166,16 +1262,16 @@ async function renderFeeStructureSection_(content) {
     <hr style="margin:28px 0;border-color:var(--outline)">
 
     <h3>عرض وتعديل الرسوم الحالية</h3>
-    <p style="color:#888;font-size:12.5px;margin-top:-6px">اختر عاماً وفصلاً وفرعاً لمراجعة كل الصفوف، وتعديل أي مبلغ بمفرده</p>
-    <div class="field"><label>العام الدراسي</label><input type="text" id="fs_year" value="${escapeHtml(feeStructureFilters_.academicYear)}"></div>
-    <div class="field"><label>الفصل الدراسي</label>
-      <select id="fs_term">${terms.map((t) => `<option value="${t.id}" ${String(t.id) === String(feeStructureFilters_.termId) ? 'selected' : ''}>${escapeHtml(t.academic_year)} — ${escapeHtml(t.name)}</option>`).join('')}</select>
-    </div>
+    <p style="color:#888;font-size:12.5px;margin-top:-6px">اختر الفرع لمراجعة كل الصفوف بنفس العام والفصل أعلاه، وتعديل أي مبلغ بمفرده</p>
     <div class="field"><label>الفرع</label>
       <select id="fs_branch">${branches.map((b) => `<option value="${escapeHtml(b)}" ${b === feeStructureFilters_.branch ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}</select>
     </div>
     <button type="button" id="fs_loadBtn">تحميل الرسوم</button>
     <div id="fs_gradesArea" style="margin-top:20px"></div>`;
+
+  document.getElementById('fsb_wholeYear').addEventListener('change', (e) => {
+    document.getElementById('fs_sharedTermField').style.display = e.target.checked ? 'none' : 'block';
+  });
 
   /* ---------- تفاعل نموذج التعيين الجديد ---------- */
   document.querySelectorAll('input[name="fsb_scope"]').forEach((r) => {
@@ -1187,14 +1283,10 @@ async function renderFeeStructureSection_(content) {
     });
   });
 
-  document.getElementById('fsb_wholeYear').addEventListener('change', (e) => {
-    document.getElementById('fsb_termField').style.display = e.target.checked ? 'none' : 'block';
-  });
-
   document.getElementById('fsb_saveBtn').addEventListener('click', async () => {
     const feeItemId = document.getElementById('fsb_feeItem').value;
     const amount = document.getElementById('fsb_amount').value.trim();
-    const academicYear = document.getElementById('fsb_year').value.trim();
+    const academicYear = document.getElementById('fs_sharedYear').value.trim();
     const wholeYear = document.getElementById('fsb_wholeYear').checked;
     const scope = document.querySelector('input[name="fsb_scope"]:checked').value;
 
@@ -1205,7 +1297,7 @@ async function renderFeeStructureSection_(content) {
       termIds = terms.filter((t) => t.academic_year === academicYear).map((t) => t.id);
       if (!termIds.length) { showToast('لا توجد فصول مُعرَّفة لهذا العام الدراسي بالتحديد — تحقّق من صيغة العام', 'error'); return; }
     } else {
-      const termId = document.getElementById('fsb_term').value;
+      const termId = document.getElementById('fs_sharedTerm').value;
       if (!termId) { showToast('اختر الفصل الدراسي', 'error'); return; }
       termIds = [termId];
     }
@@ -1262,8 +1354,8 @@ async function renderFeeStructureSection_(content) {
 
   /* ---------- شبكة المراجعة والتعديل الفردي ---------- */
   document.getElementById('fs_loadBtn').addEventListener('click', async () => {
-    feeStructureFilters_.academicYear = document.getElementById('fs_year').value.trim();
-    feeStructureFilters_.termId = document.getElementById('fs_term').value;
+    feeStructureFilters_.academicYear = document.getElementById('fs_sharedYear').value.trim();
+    feeStructureFilters_.termId = document.getElementById('fs_sharedTerm').value;
     feeStructureFilters_.branch = document.getElementById('fs_branch').value;
     if (!feeStructureFilters_.academicYear || !feeStructureFilters_.termId || !feeStructureFilters_.branch) {
       showToast('أكمل العام والفصل والفرع أولاً', 'error');
@@ -1392,4 +1484,370 @@ function renderAuditLogTable() {
       </div>
       <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${new Date(r.created_at).toLocaleString('ar')}</span>
     </div>`).join('');
+}
+
+/* ===================== صفحة الطلاب ===================== */
+
+const FINANCIAL_STATUS_LABELS_ = {
+  CLEARED: { label: 'مسدَّد بالكامل', badge: 'status-badge-cleared' },
+  PARTIALLY_PAID: { label: 'مسدَّد جزئياً', badge: 'status-badge-partial' },
+  OVERDUE: { label: 'متأخر', badge: 'status-badge-overdue' },
+  UNPAID: { label: 'غير مسدَّد', badge: 'status-badge-unpaid' },
+  EXEMPT: { label: 'معفى', badge: 'status-badge-exempt' },
+  BLOCKED: { label: 'موقوف مالياً', badge: 'status-badge-blocked' },
+  NO_INVOICES: { label: 'بلا فواتير', badge: 'status-badge-off' },
+};
+
+let studentsCache_ = [];
+
+async function renderStudentsView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  const isFullAccess = APP.user.role === 'role_admin' || APP.user.role === 'role_finance_admin';
+  const [branches, grades, sections] = await Promise.all([getBranchesOnce(), getGradesOnce(), getSectionsOnce()]);
+
+  main.innerHTML = `
+    <div class="card">
+      <div class="field"><label>بحث بالاسم أو رقم الطالب أو رقم الهوية أو اسم ولي الأمر</label><input type="text" id="stu_search" placeholder="ابحث هنا..."></div>
+      <div class="kpi-grid" style="margin-bottom:0">
+        ${isFullAccess ? `<div class="field"><label>الفرع</label><select id="stu_branch"><option value="">كل الفروع المتاحة</option>${branches.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}</select></div>` : ''}
+        <div class="field"><label>الصف</label><select id="stu_grade"><option value="">كل الصفوف</option>${grades.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
+        <div class="field"><label>الشعبة</label><select id="stu_section"><option value="">كل الشعب</option>${sections.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
+        <div class="field"><label>الحالة المالية</label><select id="stu_status"><option value="">الكل</option>${Object.entries(FINANCIAL_STATUS_LABELS_).map(([k, v]) => `<option value="${k}">${escapeHtml(v.label)}</option>`).join('')}</select></div>
+      </div>
+    </div>
+    <div id="studentsListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>`;
+
+  const triggerReload = debounce(loadStudentsList, 350);
+  document.getElementById('stu_search').addEventListener('input', triggerReload);
+  const branchEl = document.getElementById('stu_branch');
+  if (branchEl) branchEl.addEventListener('change', loadStudentsList);
+  document.getElementById('stu_grade').addEventListener('change', loadStudentsList);
+  document.getElementById('stu_section').addEventListener('change', loadStudentsList);
+  document.getElementById('stu_status').addEventListener('change', renderStudentsGrid); // فلتر محلي فقط — بلا إعادة جلب من الخادم
+
+  await loadStudentsList();
+}
+
+async function loadStudentsList() {
+  const area = document.getElementById('studentsListArea');
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div>`;
+
+  const body = {
+    search: document.getElementById('stu_search').value.trim(),
+    grade: document.getElementById('stu_grade').value,
+    section: document.getElementById('stu_section').value,
+  };
+  const branchEl = document.getElementById('stu_branch');
+  if (branchEl) body.branch = branchEl.value;
+
+  try {
+    studentsCache_ = await apiCall('students-finance', { method: 'POST', body: { action: 'list', ...body } });
+    renderStudentsGrid();
+  } catch (e) {
+    area.innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderStudentsGrid() {
+  const area = document.getElementById('studentsListArea');
+  const statusFilter = document.getElementById('stu_status').value;
+  const list = statusFilter ? studentsCache_.filter((s) => s.financialStatus === statusFilter) : studentsCache_;
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون</p>'; return; }
+
+  area.innerHTML = `<div class="person-card-grid">${list.map((s) => {
+    const info = FINANCIAL_STATUS_LABELS_[s.financialStatus] || FINANCIAL_STATUS_LABELS_.NO_INVOICES;
+    return `
+    <div class="person-card" data-id="${escapeHtml(s.id)}" data-card-clickable>
+      <div class="person-card-header">
+        <span class="person-avatar">${escapeHtml((s.nameAr || '؟').trim().charAt(0))}</span>
+        <div class="person-card-info">
+          <div class="person-card-name">${escapeHtml(s.nameAr)}</div>
+          <div class="person-card-role">${escapeHtml(s.grade)} — ${escapeHtml(s.section)}</div>
+        </div>
+        <span class="status-badge ${info.badge}">${escapeHtml(info.label)}</span>
+      </div>
+      <div class="person-card-body">
+        <div class="person-card-row"><span>رقم الطالب</span><span>${escapeHtml(s.id)}</span></div>
+        <div class="person-card-row"><span>الفرع</span><span>${escapeHtml(s.branch)}</span></div>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+
+  area.querySelectorAll('[data-card-clickable]').forEach((card) => {
+    card.addEventListener('click', () => openStudentFinanceCard(card.getAttribute('data-id')));
+  });
+}
+
+/** بطاقة الطالب المالية الموسَّعة — بياناته، فواتيره، وزرّا تسجيل دفعة وكشف حساب */
+async function openStudentFinanceCard(studentId) {
+  let data;
+  try {
+    data = await apiCall('students-finance', { method: 'POST', body: { action: 'getCard', studentId } });
+  } catch (e) {
+    showToast(e.message, 'error');
+    return;
+  }
+
+  const student = data.student;
+  const latestClearance = data.clearance[0];
+  const statusInfo = FINANCIAL_STATUS_LABELS_[latestClearance?.status] || FINANCIAL_STATUS_LABELS_.NO_INVOICES;
+
+  const INVOICE_STATUS_LABELS_ = { unpaid: 'غير مسدَّدة', partially_paid: 'مسدَّدة جزئياً', paid: 'مسدَّدة بالكامل', void: 'مُلغاة' };
+  const invoicesHtml = data.invoices.length ? data.invoices.map((inv) => {
+    const remaining = Number(inv.total_amount) - Number(inv.paid_amount);
+    return `
+      <div class="invoice-row">
+        <div class="invoice-row-main">
+          <div class="invoice-row-title">${escapeHtml(inv.invoice_number)}</div>
+          <div class="invoice-row-sub">${new Date(inv.issue_date).toLocaleDateString('ar-SA')} — ${escapeHtml(INVOICE_STATUS_LABELS_[inv.status] || inv.status)}</div>
+        </div>
+        <div class="invoice-row-amounts">
+          <div>${formatMoney(inv.total_amount)}</div>
+          ${remaining > 0 && inv.status !== 'void' ? `<div class="invoice-row-remaining">متبقي: ${formatMoney(remaining)}</div>` : ''}
+        </div>
+      </div>`;
+  }).join('') : '<p style="color:#888;font-size:12.5px">لا توجد فواتير بعد</p>';
+
+  const { overlay } = showDetailModal(student.name_ar, `${student.grade} — ${student.section} — ${student.branch}`, [
+    { label: 'رقم الطالب', value: student.id },
+    { label: 'رقم الهوية', value: student.national_id },
+    { label: 'الحالة المالية', value: statusInfo.label },
+    { label: 'إجمالي المستحق', value: formatMoney(data.totalOutstanding) },
+  ], `
+    <div style="margin:14px 0"><h4 style="margin:0 0 8px;font-size:13px;color:var(--primary)">الفواتير</h4>${invoicesHtml}</div>
+    <div class="receipt-actions">
+      <button type="button" id="openRecordPaymentBtn">${ICONS.payment()} تسجيل دفعة جديدة</button>
+      <button type="button" id="openStatementBtn" class="btn-outline-sm">${ICONS.invoice()} كشف الحساب</button>
+    </div>
+  `);
+
+  const openInvoices = data.invoices.filter((i) => i.status === 'unpaid' || i.status === 'partially_paid');
+  document.getElementById('openRecordPaymentBtn').addEventListener('click', () => {
+    overlay.remove();
+    openRecordPaymentModal(student, openInvoices);
+  });
+  document.getElementById('openStatementBtn').addEventListener('click', () => {
+    overlay.remove();
+    openStatementView(student);
+  });
+}
+
+/** نموذج تسجيل دفعة جديدة — يُفتَح من بطاقة الطالب المالية (من صفحة الطلاب أو لاحقاً من الفواتير) */
+async function openRecordPaymentModal(student, openInvoices) {
+  if (!openInvoices.length) {
+    showToast('لا توجد فواتير مستحقة لهذا الطالب حالياً', 'error');
+    return;
+  }
+
+  const invoiceOptions = openInvoices.map((inv) => {
+    const remaining = Number(inv.total_amount) - Number(inv.paid_amount);
+    return `<option value="${inv.id}" data-remaining="${remaining}">${escapeHtml(inv.invoice_number)} — متبقي ${formatMoney(remaining)}</option>`;
+  }).join('');
+
+  const { close } = showFormModal('تسجيل دفعة جديدة', student.name_ar, `
+    <form id="paymentForm">
+      <div class="field"><label>الفاتورة *</label><select id="pay_invoice" required>${invoiceOptions}</select></div>
+      <div class="field"><label>المبلغ (ريال) *</label><input type="number" min="0.01" step="0.01" id="pay_amount" required></div>
+      <div class="field"><label>طريقة الدفع *</label><select id="pay_method" required><option value="">-- جارِ التحميل --</option></select></div>
+      <div class="field"><label>رقم المرجع</label><input type="text" id="pay_ref"></div>
+      <div class="field"><label>تاريخ الدفع</label><input type="date" id="pay_date" value="${todayISODate()}"></div>
+      <div class="field"><label>ملاحظات</label><input type="text" id="pay_notes"></div>
+      <button type="submit" id="pay_submitBtn" style="width:100%">حفظ الدفعة</button>
+    </form>
+  `);
+
+  apiCall('fee-settings', { method: 'POST', body: { action: 'listPaymentMethods' } }).then((methods) => {
+    document.getElementById('pay_method').innerHTML = methods.filter((m) => m.is_active).map((m) => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('');
+  }).catch(() => { document.getElementById('pay_method').innerHTML = '<option value="">تعذّر تحميل طرق الدفع</option>'; });
+
+  const invoiceSelect = document.getElementById('pay_invoice');
+  const amountInput = document.getElementById('pay_amount');
+  const fillAmount = () => { const opt = invoiceSelect.selectedOptions[0]; if (opt) amountInput.value = opt.getAttribute('data-remaining'); };
+  invoiceSelect.addEventListener('change', fillAmount);
+  fillAmount();
+
+  document.getElementById('paymentForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('pay_submitBtn');
+    btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+    try {
+      const result = await apiCall('payments', {
+        method: 'POST',
+        body: {
+          action: 'record', invoiceId: invoiceSelect.value, amount: Number(amountInput.value),
+          paymentMethodId: document.getElementById('pay_method').value,
+          referenceNumber: document.getElementById('pay_ref').value.trim(),
+          paymentDate: document.getElementById('pay_date').value,
+          notes: document.getElementById('pay_notes').value.trim(),
+        },
+      });
+      showToast('تم الحفظ بنجاح' + (result.isOverpayment ? ' (دفعة زائدة عن المتبقي)' : ''), 'success');
+      close();
+      await openReceiptModal(result.id);
+    } catch (err) {
+      showToast(err.message, 'error');
+      btn.disabled = false; btn.textContent = 'حفظ الدفعة';
+    }
+  });
+}
+
+/** توليد HTML سند القبض — مستند واحد ذاتي الاكتفاء (أنماط داخلية)، يُستخدَم بالمعاينة والطباعة والـPDF معاً */
+function generateReceiptHtml(payment, invoice, student, recorderName, paymentMethodName, siteInfo) {
+  return `
+    <div style="font-family:'Manrope',Tahoma,Arial,sans-serif;direction:rtl;text-align:right;padding:26px;background:#fff;color:#202124;max-width:480px;margin:0 auto">
+      <div style="display:flex;align-items:center;gap:12px;justify-content:center;margin-bottom:6px">
+        ${siteInfo.logoUrl ? `<img src="${siteInfo.logoUrl}" crossorigin="anonymous" style="width:52px;height:52px;border-radius:10px;object-fit:cover">` : ''}
+        <div style="text-align:center">
+          <div style="font-weight:800;font-size:16px">${escapeHtml(siteInfo.schoolName || 'المدرسة')}</div>
+          <div style="font-size:11.5px;color:#78787a">${escapeHtml(payment.branch)}</div>
+        </div>
+      </div>
+      <div style="text-align:center;font-weight:800;font-size:18px;margin:14px 0 4px;border-top:2px solid #202124;border-bottom:2px solid #202124;padding:8px 0">سند قبض</div>
+      <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#78787a;margin-bottom:14px">
+        <span>رقم السند: ${escapeHtml(payment.payment_number)}</span>
+        <span>التاريخ: ${new Date(payment.payment_date).toLocaleDateString('ar-SA')}</span>
+      </div>
+      <div style="background:#F5F5F4;border-radius:12px;padding:14px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#78787a">اسم الطالب</span><span style="font-weight:700">${escapeHtml(student.name_ar)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#78787a">رقم الهوية</span><span style="font-weight:700">${escapeHtml(student.national_id || '—')}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#78787a">الصف</span><span style="font-weight:700">${escapeHtml(student.grade)} — ${escapeHtml(student.section)}</span></div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:14px;font-size:13px">
+        <tr style="border-bottom:1px solid #E7E7E5"><td style="padding:8px 0;color:#78787a">رقم الفاتورة</td><td style="padding:8px 0;font-weight:700;text-align:left">${escapeHtml(invoice?.invoice_number || '—')}</td></tr>
+        <tr style="border-bottom:1px solid #E7E7E5"><td style="padding:8px 0;color:#78787a">طريقة الدفع</td><td style="padding:8px 0;font-weight:700;text-align:left">${escapeHtml(paymentMethodName || '—')}</td></tr>
+        ${payment.reference_number ? `<tr style="border-bottom:1px solid #E7E7E5"><td style="padding:8px 0;color:#78787a">رقم المرجع</td><td style="padding:8px 0;font-weight:700;text-align:left">${escapeHtml(payment.reference_number)}</td></tr>` : ''}
+        <tr><td style="padding:12px 0 4px;color:#78787a;font-size:15px">المبلغ المستلم</td><td style="padding:12px 0 4px;font-weight:800;text-align:left;font-size:19px">${formatMoney(payment.amount)}</td></tr>
+      </table>
+      ${payment.notes ? `<div style="font-size:12px;color:#78787a;margin-bottom:14px">ملاحظات: ${escapeHtml(payment.notes)}</div>` : ''}
+      <div style="border-top:1px dashed #E7E7E5;padding-top:10px;font-size:11px;color:#78787a;display:flex;justify-content:space-between">
+        <span>استلمها: ${escapeHtml(recorderName || '—')}</span>
+        <span>شكراً لتعاملكم معنا</span>
+      </div>
+    </div>`;
+}
+
+/** نافذة سند القبض — تُفتَح تلقائياً بعد تسجيل أي دفعة، وقابلة لإعادة الفتح لاحقاً بمعرِّف الدفعة فقط */
+async function openReceiptModal(paymentId) {
+  let data;
+  try {
+    data = await apiCall('payments', { method: 'POST', body: { action: 'get', paymentId } });
+    if (!APP.siteInfo) {
+      APP.siteInfo = await apiCall('fee-settings', { method: 'POST', body: { action: 'getSiteInfo' }, requiresAuth: false });
+    }
+  } catch (e) {
+    showToast(e.message, 'error');
+    return;
+  }
+
+  const receiptHtml = generateReceiptHtml(data.payment, data.invoice, data.student, data.recorderName, data.paymentMethodName, APP.siteInfo);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card modal-card-lg">
+      <div class="modal-header">
+        <div><h3>سند القبض</h3><p class="modal-subtitle">تم الحفظ بنجاح</p></div>
+        <button type="button" class="modal-close-btn" id="receiptCloseBtn">${ICONS.close()}</button>
+      </div>
+      <div class="modal-body">
+        <div class="receipt-preview-wrap" id="receiptPreviewArea">${receiptHtml}</div>
+        <div class="receipt-actions">
+          <button type="button" id="receiptPrintBtn">${ICONS.print()} طباعة</button>
+          <button type="button" id="receiptDownloadBtn" class="btn-outline-sm">${ICONS.download()} تحميل PDF</button>
+          <button type="button" id="receiptShareBtn" class="btn-outline-sm">${ICONS.share()} مشاركة</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('show'));
+
+  const close = () => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200); };
+  document.getElementById('receiptCloseBtn').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  document.getElementById('receiptPrintBtn').addEventListener('click', () => printHtmlDocument(receiptHtml, 'سند قبض - ' + data.payment.payment_number));
+  document.getElementById('receiptDownloadBtn').addEventListener('click', () => downloadHtmlAsPdf(document.getElementById('receiptPreviewArea'), `سند_قبض_${data.payment.payment_number}`));
+  document.getElementById('receiptShareBtn').addEventListener('click', () => shareHtmlAsPdf(document.getElementById('receiptPreviewArea'), `سند_قبض_${data.payment.payment_number}`, 'سند قبض'));
+}
+
+/** نافذة كشف الحساب — بنفس هوية سند القبض البصرية بالضبط، قابلة للطباعة/التحميل/المشاركة */
+async function openStatementView(student) {
+  const studentName = student.nameAr || student.name_ar;
+  let data;
+  try {
+    data = await apiCall('students-finance', { method: 'POST', body: { action: 'getStatement', studentId: student.id } });
+    if (!APP.siteInfo) {
+      APP.siteInfo = await apiCall('fee-settings', { method: 'POST', body: { action: 'getSiteInfo' }, requiresAuth: false });
+    }
+  } catch (e) {
+    showToast(e.message, 'error');
+    return;
+  }
+
+  const rowsHtml = data.ledger.map((r) => `
+    <tr style="border-bottom:1px solid #E7E7E5">
+      <td style="padding:8px 4px;font-size:11.5px">${new Date(r.entry_date).toLocaleDateString('ar-SA')}</td>
+      <td style="padding:8px 4px;font-size:11.5px">${escapeHtml(r.ref_number)}</td>
+      <td style="padding:8px 4px;font-size:11.5px;text-align:left">${Number(r.debit) ? formatMoney(r.debit) : '—'}</td>
+      <td style="padding:8px 4px;font-size:11.5px;text-align:left">${Number(r.credit) ? formatMoney(r.credit) : '—'}</td>
+      <td style="padding:8px 4px;font-size:11.5px;text-align:left;font-weight:700">${formatMoney(r.runningBalance)}</td>
+    </tr>`).join('');
+
+  const statementHtml = `
+    <div style="font-family:'Manrope',Tahoma,Arial,sans-serif;direction:rtl;text-align:right;padding:26px;background:#fff;color:#202124">
+      <div style="display:flex;align-items:center;gap:12px;justify-content:center;margin-bottom:6px">
+        ${APP.siteInfo.logoUrl ? `<img src="${APP.siteInfo.logoUrl}" crossorigin="anonymous" style="width:52px;height:52px;border-radius:10px;object-fit:cover">` : ''}
+        <div style="text-align:center">
+          <div style="font-weight:800;font-size:16px">${escapeHtml(APP.siteInfo.schoolName || 'المدرسة')}</div>
+          <div style="font-size:11.5px;color:#78787a">${escapeHtml(student.branch)}</div>
+        </div>
+      </div>
+      <div style="text-align:center;font-weight:800;font-size:18px;margin:14px 0 4px;border-top:2px solid #202124;border-bottom:2px solid #202124;padding:8px 0">كشف حساب</div>
+      <div style="background:#F5F5F4;border-radius:12px;padding:14px;margin:14px 0">
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#78787a">اسم الطالب</span><span style="font-weight:700">${escapeHtml(studentName)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#78787a">الصف</span><span style="font-weight:700">${escapeHtml(student.grade)} — ${escapeHtml(student.section)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span style="color:#78787a">تاريخ الإصدار</span><span style="font-weight:700">${new Date().toLocaleDateString('ar-SA')}</span></div>
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="border-bottom:2px solid #202124;font-size:11px;color:#78787a">
+          <th style="padding:6px 4px;text-align:right">التاريخ</th><th style="padding:6px 4px;text-align:right">المرجع</th>
+          <th style="padding:6px 4px;text-align:left">مدين</th><th style="padding:6px 4px;text-align:left">دائن</th><th style="padding:6px 4px;text-align:left">الرصيد</th>
+        </tr></thead>
+        <tbody>${rowsHtml || '<tr><td colspan="5" style="padding:20px;text-align:center;color:#888">لا توجد حركات بعد</td></tr>'}</tbody>
+      </table>
+      <div style="display:flex;justify-content:space-between;margin-top:16px;padding-top:12px;border-top:2px solid #202124;font-weight:800;font-size:15px">
+        <span>الرصيد الحالي (المستحق)</span><span>${formatMoney(data.currentBalance)}</span>
+      </div>
+    </div>`;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card modal-card-lg">
+      <div class="modal-header">
+        <div><h3>كشف الحساب</h3><p class="modal-subtitle">${escapeHtml(studentName)}</p></div>
+        <button type="button" class="modal-close-btn" id="stmtCloseBtn">${ICONS.close()}</button>
+      </div>
+      <div class="modal-body">
+        <div class="receipt-preview-wrap" id="stmtPreviewArea">${statementHtml}</div>
+        <div class="receipt-actions">
+          <button type="button" id="stmtPrintBtn">${ICONS.print()} طباعة</button>
+          <button type="button" id="stmtDownloadBtn" class="btn-outline-sm">${ICONS.download()} تحميل PDF</button>
+          <button type="button" id="stmtShareBtn" class="btn-outline-sm">${ICONS.share()} مشاركة</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('show'));
+
+  const close = () => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200); };
+  document.getElementById('stmtCloseBtn').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  document.getElementById('stmtPrintBtn').addEventListener('click', () => printHtmlDocument(statementHtml, 'كشف حساب - ' + studentName));
+  document.getElementById('stmtDownloadBtn').addEventListener('click', () => downloadHtmlAsPdf(document.getElementById('stmtPreviewArea'), `كشف_حساب_${student.id}`));
+  document.getElementById('stmtShareBtn').addEventListener('click', () => shareHtmlAsPdf(document.getElementById('stmtPreviewArea'), `كشف_حساب_${student.id}`, 'كشف حساب'));
 }
