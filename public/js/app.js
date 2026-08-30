@@ -140,14 +140,19 @@ function renderShell() {
   const nameInitial = (APP.user.fullName || '?').trim().charAt(0);
   document.getElementById('app').innerHTML = `
     <div class="app-body">
+      <div class="sidebar-overlay" id="sidebarOverlay"></div>
       <aside class="sidebar" id="sidebar">
-        <div class="sidebar-brand">${ICONS.logo()}<span>الإدارة المالية</span></div>
+        <div class="sidebar-brand">
+          ${ICONS.logo()}<span>الإدارة المالية</span>
+          <button type="button" class="sidebar-close-btn" id="sidebarCloseBtn">${ICONS.close()}</button>
+        </div>
         <nav id="sidebarNav"></nav>
       </aside>
       <div class="app-main-col">
         <header class="app-header">
           <div class="header-start">
             <button class="menu-toggle-btn" id="menuToggleBtn">${ICONS.menu()}</button>
+            <div class="header-brand-mobile">${ICONS.logo()}<span>الإدارة المالية</span></div>
             <div class="app-header-title" id="pageTitle">الرئيسية</div>
           </div>
           <div class="header-branch-label">${escapeHtml(APP.user.branch || '')}</div>
@@ -161,9 +166,17 @@ function renderShell() {
     </div>`;
 
   renderSidebarNav();
+
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebarOverlay');
+  const openSidebar = () => { sidebar.classList.add('open'); overlay.classList.add('show'); };
+  const closeSidebar = () => { sidebar.classList.remove('open'); overlay.classList.remove('show'); };
+
   document.getElementById('menuToggleBtn').addEventListener('click', () => {
-    document.getElementById('sidebar').classList.toggle('open');
+    sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
   });
+  document.getElementById('sidebarCloseBtn').addEventListener('click', closeSidebar);
+  overlay.addEventListener('click', closeSidebar);
   document.getElementById('headerUser').addEventListener('click', () => {
     if (confirm('تسجيل الخروج؟')) doLogout();
   });
@@ -199,6 +212,7 @@ function navigate(pageKey) {
 
   document.getElementById('pageTitle').textContent = page.label;
   document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
   document.querySelectorAll('#sidebarNav a').forEach((a) => a.classList.toggle('active', a.getAttribute('data-page') === pageKey));
 
   const renderFn = window[`render${pageKey.charAt(0).toUpperCase() + pageKey.slice(1)}View`];
