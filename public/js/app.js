@@ -44,8 +44,8 @@ const PAGE_REGISTRY = {
   payroll: { label: 'الرواتب', icon: 'payroll', render: comingSoonRender('الرواتب') },
   financeStaff: { label: 'موظفو المالية', icon: 'staff', render: renderFinanceStaffView },
   users: { label: 'المستخدمون', icon: 'users', render: renderUsersView },
-  feeSettings: { label: 'الإعدادات', icon: 'settings', render: comingSoonRender('الإعدادات') },
-  auditLog: { label: 'سجل التدقيق', icon: 'audit', render: comingSoonRender('سجل التدقيق') },
+  feeSettings: { label: 'الإعدادات', icon: 'settings', render: renderFeeSettingsView },
+  auditLog: { label: 'سجل التدقيق', icon: 'audit', render: renderAuditLogView },
 };
 
 /** أي دور غير مذكور هنا يحصل تلقائياً على "الرئيسية" فقط */
@@ -691,7 +691,7 @@ function renderStaffTable() {
   if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد موظفو مالية مطابقون</p>'; return; }
 
   area.innerHTML = `<div class="person-card-grid">${list.map((e) => `
-    <div class="person-card">
+    <div class="person-card" data-id="${escapeHtml(e.id)}" data-card-clickable>
       <div class="person-card-header">
         <span class="person-avatar">${escapeHtml((e.nameAr || '؟').trim().charAt(0))}</span>
         <div class="person-card-info">
@@ -700,7 +700,7 @@ function renderStaffTable() {
         </div>
       </div>
       <div class="person-card-body">
-        <div class="person-card-row"><span>الفروع</span><span>${escapeHtml(e.allBranches.join('، '))}</span></div>
+        <div class="person-card-row"><span>رقم الهوية</span><span>${escapeHtml(e.nationalId)}</span></div>
       </div>
       <div class="person-card-footer">
         <div class="person-card-actions">
@@ -710,14 +710,33 @@ function renderStaffTable() {
       </div>
     </div>`).join('')}</div>`;
 
+  // 🆕 الضغط على جسم البطاقة (بعيداً عن أزرار التعديل/الحذف) يفتح تفاصيل كاملة — الفروع كلها هنا فقط، مو بواجهة القائمة
+  area.querySelectorAll('[data-card-clickable]').forEach((card) => {
+    card.addEventListener('click', (evt) => {
+      if (evt.target.closest('button')) return;
+      const emp = APP.allFinanceStaff.find((x) => x.id === card.getAttribute('data-id'));
+      if (!emp) return;
+      showDetailModal(emp.nameAr, ROLE_LABELS_AR[emp.role] || emp.role, [
+        { label: 'رقم الهوية', value: emp.nationalId },
+        { label: 'الدور (الصلاحية)', value: ROLE_LABELS_AR[emp.role] || emp.role },
+        { label: 'الجنس', value: emp.gender },
+        { label: 'الفروع', value: emp.allBranches.join('، ') },
+        { label: 'حالة الحساب', value: emp.status === 'active' ? 'مفعَّل' : 'معطَّل' },
+        { label: 'تاريخ الإضافة', value: emp.createdAt ? new Date(emp.createdAt).toLocaleDateString('ar') : null },
+      ]);
+    });
+  });
+
   area.querySelectorAll('.btn-icon-edit').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (evt) => {
+      evt.stopPropagation();
       const emp = APP.allFinanceStaff.find((x) => x.id === btn.getAttribute('data-id'));
       if (emp) startEditStaff(emp);
     });
   });
   area.querySelectorAll('.btn-icon-delete').forEach((btn) => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (evt) => {
+      evt.stopPropagation();
       const name = btn.getAttribute('data-name');
       if (!confirm(`تأكيد حذف الموظف "${name}"؟ سيُعطَّل حسابه فوراً.`)) return;
       try {
@@ -837,4 +856,369 @@ function renderUsersTable() {
       }
     });
   });
+}
+
+/* ===================== صفحة الإعدادات الموحَّدة (شريط جانبي داخلي + محتوى) ===================== */
+// 🆕 نفس فلسفة إعدادات موقع الموظفين بالضبط: قائمة تصنيفات يسار، محتوى القسم المُختار يمين.
+// كل الأقسام هنا محصورة أصلاً بأدمن عام/أدمن مالية فقط (عبر ROLE_PAGES).
+
+const FIN_SETTINGS_SECTIONS_ = [
+  { key: 'feeItems', label: 'بنود الرسوم', icon: 'invoice' },
+  { key: 'expenseCategories', label: 'تصنيفات المصروفات', icon: 'revenue' },
+  { key: 'paymentMethods', label: 'طرق الدفع', icon: 'payment' },
+  { key: 'accounts', label: 'الحسابات المالية', icon: 'branches' },
+  { key: 'feeStructure', label: 'رسوم الفروع والصفوف', icon: 'period' },
+];
+
+let financeSettingsActiveSection_ = 'feeItems';
+let feeStructureFilters_ = { academicYear: '', termId: '', branch: '' };
+
+async function renderFeeSettingsView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="settings-shell">
+      <nav class="settings-nav">
+        ${FIN_SETTINGS_SECTIONS_.map((s) => `
+          <button type="button" class="settings-nav-item ${s.key === financeSettingsActiveSection_ ? 'active' : ''}" data-fin-section="${s.key}">
+            ${ICONS[s.icon]()}<span>${escapeHtml(s.label)}</span>
+          </button>`).join('')}
+      </nav>
+      <div class="settings-content" id="finSettingsContent"></div>
+    </div>`;
+
+  document.querySelectorAll('[data-fin-section]').forEach((btn) => {
+    btn.addEventListener('click', () => { financeSettingsActiveSection_ = btn.getAttribute('data-fin-section'); renderFinSettingsSection(); });
+  });
+
+  renderFinSettingsSection();
+}
+
+async function renderFinSettingsSection() {
+  document.querySelectorAll('[data-fin-section]').forEach((b) => b.classList.toggle('active', b.getAttribute('data-fin-section') === financeSettingsActiveSection_));
+  const content = document.getElementById('finSettingsContent');
+  content.innerHTML = `<div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div>`;
+
+  try {
+    if (financeSettingsActiveSection_ === 'feeItems') {
+      await renderLookupSection_(content, { listAction: 'listFeeItems', addAction: 'addFeeItem', toggleAction: 'toggleFeeItemActive', label: 'بند رسوم' });
+    } else if (financeSettingsActiveSection_ === 'expenseCategories') {
+      await renderLookupSection_(content, { listAction: 'listExpenseCategories', addAction: 'addExpenseCategory', toggleAction: 'toggleExpenseCategoryActive', label: 'تصنيف مصروف' });
+    } else if (financeSettingsActiveSection_ === 'paymentMethods') {
+      await renderLookupSection_(content, { listAction: 'listPaymentMethods', addAction: 'addPaymentMethod', toggleAction: 'togglePaymentMethodActive', label: 'طريقة دفع' });
+    } else if (financeSettingsActiveSection_ === 'accounts') {
+      await renderAccountsSection_(content);
+    } else if (financeSettingsActiveSection_ === 'feeStructure') {
+      await renderFeeStructureSection_(content);
+    }
+  } catch (e) {
+    content.innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+/** قسم عام لأي قائمة مرجعية بسيطة (بند رسوم / تصنيف مصروف / طريقة دفع) — إضافة + تفعيل/تعطيل عبر شرائح */
+async function renderLookupSection_(content, cfg) {
+  const items = await apiCall('fee-settings', { method: 'POST', body: { action: cfg.listAction } });
+
+  content.innerHTML = `
+    <h2 style="margin-top:0">${escapeHtml(cfg.label)} — إضافة وإدارة</h2>
+    <p style="color:#888;font-size:12.5px;margin-top:-10px">تعطيل عنصر لا يحذفه — يختفي من القوائم الجديدة فقط، ولا يؤثر على أي سجل قديم يستخدمه</p>
+    <div class="chip-input-wrap"><input type="text" id="lookupAddInput" placeholder="أضف ${escapeHtml(cfg.label)} جديد..."></div>
+    <button type="button" id="lookupAddBtn" style="margin-top:10px">إضافة</button>
+    <div class="chip-list" id="lookupChipList" style="margin-top:18px"></div>`;
+
+  function renderChips() {
+    const box = document.getElementById('lookupChipList');
+    box.innerHTML = items.length ? items.map((it) => `
+      <span class="chip ${it.is_active ? '' : 'chip-inactive'}">
+        ${escapeHtml(it.name)}
+        <span class="chip-remove" data-toggle-id="${it.id}" data-active="${it.is_active}" title="${it.is_active ? 'تعطيل' : 'إعادة تفعيل'}">${it.is_active ? ICONS.close() : ICONS.plus()}</span>
+      </span>`).join('') : '<span class="chip-empty">لا توجد عناصر بعد</span>';
+
+    box.querySelectorAll('[data-toggle-id]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        const isActive = el.getAttribute('data-active') === 'true';
+        if (!confirm(isActive ? 'تعطيل هذا العنصر؟' : 'إعادة تفعيل هذا العنصر؟')) return;
+        try {
+          await apiCall('fee-settings', { method: 'POST', body: { action: cfg.toggleAction, id: el.getAttribute('data-toggle-id'), isActive: !isActive } });
+          const item = items.find((i) => String(i.id) === el.getAttribute('data-toggle-id'));
+          if (item) item.is_active = !isActive;
+          renderChips();
+          showToast('تم التحديث بنجاح', 'success');
+        } catch (e) {
+          showToast(e.message, 'error');
+        }
+      });
+    });
+  }
+  renderChips();
+
+  document.getElementById('lookupAddBtn').addEventListener('click', async () => {
+    const val = document.getElementById('lookupAddInput').value.trim();
+    if (!val) return;
+    try {
+      await apiCall('fee-settings', { method: 'POST', body: { action: cfg.addAction, name: val } });
+      showToast('تمت الإضافة بنجاح', 'success');
+      await renderFinSettingsSection();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  });
+}
+
+/** قسم الحسابات المالية — إضافة/تعديل/تعطيل */
+async function renderAccountsSection_(content) {
+  const [branches, accounts] = await Promise.all([
+    getBranchesOnce(),
+    apiCall('fee-settings', { method: 'POST', body: { action: 'listAccounts' } }),
+  ]);
+
+  content.innerHTML = `
+    <h2 style="margin-top:0">الحسابات المالية</h2>
+    <form id="accForm">
+      <input type="hidden" id="acc_editId">
+      <div class="field"><label>اسم الحساب *</label><input id="acc_name" type="text" required></div>
+      <div class="field"><label>النوع *</label>
+        <select id="acc_type" required><option value="bank">بنكي</option><option value="cash">نقدي</option><option value="other">أخرى</option></select>
+      </div>
+      <div class="field"><label>الفرع (اتركه فارغاً لحساب عام لكل الفروع)</label>
+        <select id="acc_branch"><option value="">-- عام لكل الفروع --</option>${branches.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>رقم الحساب</label><input id="acc_number" type="text"></div>
+      <button type="submit" id="acc_submitBtn">إضافة الحساب</button>
+      <button type="button" id="acc_cancelBtn" style="display:none;background:#888;margin-top:8px">إلغاء التعديل</button>
+    </form>
+    <hr style="margin:24px 0;border-color:var(--outline)">
+    <h3>الحسابات الحالية</h3>
+    <div id="accListArea"></div>`;
+
+  function renderAccList() {
+    const area = document.getElementById('accListArea');
+    const TYPE_LABELS = { bank: 'بنكي', cash: 'نقدي', other: 'أخرى' };
+    area.innerHTML = accounts.length ? accounts.map((a) => `
+      <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface)">
+        <div>
+          <div style="font-weight:700;font-size:13px">${escapeHtml(a.name)}${a.is_active ? '' : ' (معطَّل)'}</div>
+          <div style="font-size:11.5px;color:var(--text-muted)">${TYPE_LABELS[a.account_type]} — ${escapeHtml(a.branch || 'كل الفروع')}${a.account_number ? ' — ' + escapeHtml(a.account_number) : ''}</div>
+        </div>
+        <span style="display:flex;gap:10px;flex-shrink:0">
+          <span data-edit-acc="${a.id}" style="cursor:pointer;color:var(--primary)">${ICONS.edit()}</span>
+          <span data-toggle-acc="${a.id}" data-active="${a.is_active}" style="cursor:pointer;color:${a.is_active ? '#C4483A' : '#2F7A4D'}">${a.is_active ? ICONS.trash() : ICONS.plus()}</span>
+        </span>
+      </div>`).join('') : '<p style="color:#888">لا توجد حسابات بعد</p>';
+
+    area.querySelectorAll('[data-edit-acc]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const acc = accounts.find((x) => String(x.id) === el.getAttribute('data-edit-acc'));
+        document.getElementById('acc_editId').value = acc.id;
+        document.getElementById('acc_name').value = acc.name;
+        document.getElementById('acc_type').value = acc.account_type;
+        document.getElementById('acc_branch').value = acc.branch || '';
+        document.getElementById('acc_number').value = acc.account_number || '';
+        document.getElementById('acc_submitBtn').textContent = 'حفظ التعديلات';
+        document.getElementById('acc_cancelBtn').style.display = 'inline-block';
+        document.getElementById('accForm').scrollIntoView({ behavior: 'smooth' });
+      });
+    });
+    area.querySelectorAll('[data-toggle-acc]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        const isActive = el.getAttribute('data-active') === 'true';
+        if (!confirm(isActive ? 'تعطيل هذا الحساب؟' : 'إعادة تفعيل هذا الحساب؟')) return;
+        try {
+          await apiCall('fee-settings', { method: 'POST', body: { action: 'toggleAccountActive', id: el.getAttribute('data-toggle-acc'), isActive: !isActive } });
+          showToast('تم التحديث بنجاح', 'success');
+          await renderFinSettingsSection();
+        } catch (e) {
+          showToast(e.message, 'error');
+        }
+      });
+    });
+  }
+  renderAccList();
+
+  document.getElementById('acc_cancelBtn').addEventListener('click', () => {
+    document.getElementById('accForm').reset();
+    document.getElementById('acc_editId').value = '';
+    document.getElementById('acc_submitBtn').textContent = 'إضافة الحساب';
+    document.getElementById('acc_cancelBtn').style.display = 'none';
+  });
+
+  document.getElementById('accForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const editId = document.getElementById('acc_editId').value;
+    const btn = document.getElementById('acc_submitBtn');
+    const body = {
+      name: document.getElementById('acc_name').value.trim(),
+      accountType: document.getElementById('acc_type').value,
+      branch: document.getElementById('acc_branch').value,
+      accountNumber: document.getElementById('acc_number').value.trim(),
+    };
+    btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+    try {
+      if (editId) {
+        await apiCall('fee-settings', { method: 'POST', body: { action: 'updateAccount', id: editId, ...body } });
+        showToast('تم تحديث الحساب بنجاح', 'success');
+      } else {
+        await apiCall('fee-settings', { method: 'POST', body: { action: 'addAccount', ...body } });
+        showToast('تمت إضافة الحساب بنجاح', 'success');
+      }
+      await renderFinSettingsSection();
+    } catch (err) {
+      showToast(err.message, 'error');
+      btn.disabled = false; btn.textContent = editId ? 'حفظ التعديلات' : 'إضافة الحساب';
+    }
+  });
+}
+
+/** 🆕 القسم الأهم — التحكم برسوم كل فرع لكل صف (بندك المطلوب صراحة) */
+async function renderFeeStructureSection_(content) {
+  const [branches, terms, grades, feeItemsList] = await Promise.all([
+    getBranchesOnce(),
+    apiCall('fee-settings', { method: 'POST', body: { action: 'listAcademicTerms' } }),
+    apiCall('fee-settings', { method: 'POST', body: { action: 'listGrades' } }),
+    apiCall('fee-settings', { method: 'POST', body: { action: 'listFeeItems' } }),
+  ]);
+  const activeFeeItems = feeItemsList.filter((i) => i.is_active);
+
+  if (!terms.length) {
+    content.innerHTML = `<h2 style="margin-top:0">رسوم الفروع والصفوف</h2><p style="color:#888">لا توجد فصول دراسية مُعرَّفة بعد بموقع الموظفين — أضِف فصلاً دراسياً هناك أولاً</p>`;
+    return;
+  }
+
+  content.innerHTML = `
+    <h2 style="margin-top:0">رسوم الفروع والصفوف</h2>
+    <p style="color:#888;font-size:12.5px;margin-top:-10px">حدِّد العام والفصل والفرع، ثم أدخل مبلغ كل بند رسوم لكل صف — كل صف وفرع يقدر يأخذ مبلغاً مختلفاً تماماً (مثال: نفس الصف بجدة 12,000 وبمكة 11,500)</p>
+    <div class="field"><label>العام الدراسي *</label><input type="text" id="fs_year" placeholder="مثال: 2025-2026" value="${escapeHtml(feeStructureFilters_.academicYear)}"></div>
+    <div class="field"><label>الفصل الدراسي *</label>
+      <select id="fs_term"><option value="">-- اختر --</option>${terms.map((t) => `<option value="${t.id}" ${String(t.id) === String(feeStructureFilters_.termId) ? 'selected' : ''}>${escapeHtml(t.academic_year)} — ${escapeHtml(t.name)}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>الفرع *</label>
+      <select id="fs_branch"><option value="">-- اختر --</option>${branches.map((b) => `<option value="${escapeHtml(b)}" ${b === feeStructureFilters_.branch ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}</select>
+    </div>
+    <button type="button" id="fs_loadBtn">تحميل الرسوم</button>
+    <div id="fs_gradesArea" style="margin-top:20px"></div>`;
+
+  document.getElementById('fs_loadBtn').addEventListener('click', async () => {
+    feeStructureFilters_.academicYear = document.getElementById('fs_year').value.trim();
+    feeStructureFilters_.termId = document.getElementById('fs_term').value;
+    feeStructureFilters_.branch = document.getElementById('fs_branch').value;
+    if (!feeStructureFilters_.academicYear || !feeStructureFilters_.termId || !feeStructureFilters_.branch) {
+      showToast('أكمل العام والفصل والفرع أولاً', 'error');
+      return;
+    }
+    await loadFeeStructureGrid_(grades, activeFeeItems);
+  });
+
+  if (feeStructureFilters_.academicYear && feeStructureFilters_.termId && feeStructureFilters_.branch) {
+    await loadFeeStructureGrid_(grades, activeFeeItems);
+  }
+}
+
+async function loadFeeStructureGrid_(grades, activeFeeItems) {
+  const area = document.getElementById('fs_gradesArea');
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div>`;
+
+  let existing;
+  try {
+    existing = await apiCall('fee-settings', {
+      method: 'POST',
+      body: { action: 'listFeeStructure', academicYear: feeStructureFilters_.academicYear, termId: feeStructureFilters_.termId, branch: feeStructureFilters_.branch },
+    });
+  } catch (e) {
+    area.innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+
+  if (!activeFeeItems.length) {
+    area.innerHTML = `<p style="color:#888">لا توجد بنود رسوم مُفعَّلة بعد — أضِفها أولاً من قسم "بنود الرسوم"</p>`;
+    return;
+  }
+
+  area.innerHTML = grades.map((grade) => {
+    const rows = activeFeeItems.map((item) => {
+      const existingRow = existing.find((r) => r.grade === grade && r.feeItemId === item.id);
+      return `
+        <div class="person-card-row" style="padding:8px 0">
+          <span>${escapeHtml(item.name)}</span>
+          <input type="number" min="0" step="0.01" class="fs-amount-input" data-grade="${escapeHtml(grade)}" data-fee-item="${item.id}"
+            value="${existingRow ? existingRow.amount : ''}" placeholder="0.00"
+            style="width:130px;padding:7px 10px;border:1.5px solid var(--outline);border-radius:8px;font-family:inherit">
+        </div>`;
+    }).join('');
+    return `
+      <div class="card" style="margin-bottom:14px">
+        <h3 style="margin-top:0">${escapeHtml(grade)}</h3>
+        ${rows}
+        <button type="button" class="btn-outline-sm fs-save-grade-btn" data-grade="${escapeHtml(grade)}" style="margin-top:10px">حفظ رسوم ${escapeHtml(grade)}</button>
+      </div>`;
+  }).join('');
+
+  area.querySelectorAll('.fs-save-grade-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const grade = btn.getAttribute('data-grade');
+      btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+      const inputs = area.querySelectorAll(`.fs-amount-input[data-grade="${CSS.escape(grade)}"]`);
+      let savedCount = 0;
+      try {
+        for (const input of inputs) {
+          const val = input.value.trim();
+          if (val === '') continue;
+          await apiCall('fee-settings', {
+            method: 'POST',
+            body: {
+              action: 'setFeeStructure', academicYear: feeStructureFilters_.academicYear, termId: feeStructureFilters_.termId,
+              branch: feeStructureFilters_.branch, grade, feeItemId: input.getAttribute('data-fee-item'), amount: Number(val),
+            },
+          });
+          savedCount++;
+        }
+        showToast(savedCount ? `تم حفظ ${savedCount} بند رسوم لصف ${grade}` : 'لم يتغيَّر أي مبلغ', 'success');
+      } catch (e) {
+        showToast(e.message, 'error');
+      } finally {
+        btn.disabled = false; btn.textContent = `حفظ رسوم ${grade}`;
+      }
+    });
+  });
+}
+
+/* ===================== صفحة سجل التدقيق ===================== */
+
+async function renderAuditLogView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="card">
+      <h2>سجل التدقيق (آخر 300 عملية بموقع المالية)</h2>
+      <div class="field"><label>بحث بالاسم أو نوع العملية</label><input id="auditSearchInput" type="text"></div>
+      <div id="auditLogListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('auditSearchInput').addEventListener('input', renderAuditLogTable);
+  loadAuditLogList();
+}
+
+async function loadAuditLogList() {
+  const area = document.getElementById('auditLogListArea');
+  try {
+    APP.allAuditLog = await apiCall('finance-staff', { method: 'POST', body: { action: 'auditLog' } });
+    renderAuditLogTable();
+  } catch (e) {
+    area.innerHTML = `<p style="color:#C4483A">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderAuditLogTable() {
+  const area = document.getElementById('auditLogListArea');
+  const q = (document.getElementById('auditSearchInput').value || '').trim().toLowerCase();
+  const list = (APP.allAuditLog || []).filter((r) => !q || (r.emp_name || '').toLowerCase().includes(q) || (r.action || '').toLowerCase().includes(q));
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد عمليات مطابقة</p>'; return; }
+
+  area.innerHTML = list.map((r) => `
+    <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface);align-items:flex-start">
+      <div>
+        <div style="font-weight:700;font-size:13px">${escapeHtml(r.action)}</div>
+        <div style="font-size:11.5px;color:var(--text-muted)">${escapeHtml(r.emp_name || '—')} — ${escapeHtml(ROLE_LABELS_AR[r.role] || r.role || '—')} — ${escapeHtml(r.branch || '—')}</div>
+      </div>
+      <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${new Date(r.created_at).toLocaleString('ar')}</span>
+    </div>`).join('');
 }
