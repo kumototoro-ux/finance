@@ -56,7 +56,7 @@ async function handleList(req, res) {
 
   const { data, error } = await supabaseAdmin
     .from('employees')
-    .select('id, national_id, name_ar, name_en, role, gender, branch, created_at, employee_branches(branch), users:id(status, last_login_at)')
+    .select('id, national_id, name_ar, name_en, role, gender, branch, created_at, employee_branches(branch), users!users_id_fkey(status, last_login_at)')
     .in('role', FINANCE_STAFF_ROLES_)
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
