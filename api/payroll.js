@@ -36,7 +36,7 @@ async function handleListSalaryProfiles(req, res) {
   requireRole(user, VIEW_ROLES_);
   const body = req.body || {};
 
-  let query = supabaseAdmin.from('employees').select('id, name_ar, role, branch, fin_employee_salary_profile(base_salary, default_allowances, default_deductions, updated_at)').is('deleted_at', null).order('name_ar');
+  let query = supabaseAdmin.from('employees').select('id, name_ar, role, branch, fin_employee_salary_profile!fin_employee_salary_profile_employee_id_fkey(base_salary, default_allowances, default_deductions, updated_at)').is('deleted_at', null).order('name_ar');
   if (body.branch) query = query.eq('branch', body.branch);
 
   const { data, error } = await query;
@@ -122,7 +122,7 @@ async function handleCreateRun(req, res) {
   requireRole(user, MANAGE_ROLES_);
   const d = validateBody(createPayrollRunSchema, req.body);
 
-  let employeesQuery = supabaseAdmin.from('employees').select('id, fin_employee_salary_profile(base_salary, default_allowances, default_deductions)').is('deleted_at', null);
+  let employeesQuery = supabaseAdmin.from('employees').select('id, fin_employee_salary_profile!fin_employee_salary_profile_employee_id_fkey(base_salary, default_allowances, default_deductions)').is('deleted_at', null);
   if (d.branch) employeesQuery = employeesQuery.eq('branch', d.branch);
   const { data: employees, error: empError } = await employeesQuery;
   if (empError) throw empError;
