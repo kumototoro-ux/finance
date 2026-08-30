@@ -95,8 +95,14 @@ async function handleGet(req, res) {
   }
 
   const { data: invoice } = await supabaseAdmin.from('fin_invoices').select('invoice_number, total_amount, paid_amount, status').eq('id', payment.invoice_id).maybeSingle();
+  const { data: student } = await supabaseAdmin.from('students').select('id, name_ar, national_id, branch, stage, grade, section').eq('id', payment.student_id).maybeSingle();
+  const { data: recorder } = payment.recorded_by ? await supabaseAdmin.from('employees').select('name_ar').eq('id', payment.recorded_by).maybeSingle() : { data: null };
+  const { data: method } = payment.payment_method_id ? await supabaseAdmin.from('fin_payment_methods').select('name').eq('id', payment.payment_method_id).maybeSingle() : { data: null };
 
-  return res.status(200).json({ success: true, data: { payment, invoice } });
+  return res.status(200).json({
+    success: true,
+    data: { payment, invoice, student, recorderName: recorder?.name_ar || null, paymentMethodName: method?.name || null },
+  });
 }
 
 /* -------------------- تسجيل دفعة جديدة -------------------- */
